@@ -121,6 +121,64 @@ export class HubDO {
   async fetch(request) {
     const url = new URL(request.url);
 
+    if (url.pathname === '/' || url.pathname === '/index.html') {
+      if (!isAuthorized(request, this.secret)) {
+        return new Response('Unauthorized - Please provide ?secret=your_secret in URL', {
+          status: 401,
+          headers: { 'content-type': 'text/plain; charset=utf-8' }
+        });
+      }
+      
+      const stats = await this.getStats();
+      const today = stats.periods.today || { totalTokens: 0, costUsd: 0 };
+      const month = stats.periods.month || { totalTokens: 0, costUsd: 0 };
+      
+      const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>Token Monitor Mobile</title>
+        <style>
+          body { background: #0b0f19; color: #f3f4f6; font-family: -apple-system, system-ui, sans-serif; padding: 20px; }
+          .card { background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 20px; margin-bottom: 16px; backdrop-filter: blur(10px); }
+          h1 { font-size: 1.5rem; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; }
+          .val { font-size: 2rem; font-weight: bold; color: #60a5fa; margin: 8px 0; }
+          .label { color: #9ca3af; font-size: 0.85rem; text-transform: uppercase; }
+          .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+          .dot { width: 8px; height: 8px; background: #10b981; border-radius: 50%; display: inline-block; margin-right: 6px; box-shadow: 0 0 8px #10b981;}
+          .device-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+        </style>
+      </head>
+      <body>
+        <h1><span><span class="dot"></span>Token Monitor</span> <span style="font-size: 0.9rem; color: #9ca3af;">Cloud Hub</span></h1>
+        
+        <div class="card">
+          <div class="label">Today's Usage</div>
+          <div class="val">${Number(today.totalTokens).toLocaleString()} <span style="font-size: 1rem; font-weight:normal; color:#9ca3af;">tokens</span></div>
+          <div style="color: #34d399; font-weight: 500;">$${today.costUsd.toFixed(4)} USD</div>
+        </div>
+
+        <div class="card">
+          <div class="label">This Month</div>
+          <div class="val">${Number(month.totalTokens).toLocaleString()}</div>
+          <div style="color: #34d399; font-weight: 500;">$${month.costUsd.toFixed(2)} USD</div>
+        </div>
+
+        <div class="card">
+          <div class="label" style="margin-bottom: 8px;">Active Devices (${stats.devices.length})</div>
+          ${stats.devices.map(d => `
+            <div class="device-row">
+              <span>${d.hostname} (${d.platform})</span>
+              <span style="color: ${d.stale ? '#ef4444' : '#34d399'}">${d.stale ? 'Offline' : 'Online'}</span>
+            </div>
+          `).join('')}
+        </div>
+      </body>
+      </html>`;
+      return new Response(html, { headers: { 'content-type': 'text/html; charset=utf-8' } });
+    }
+
     if (url.pathname === '/api/health') {
       const devices = await this.listDevices();
       return jsonResponse(200, {
