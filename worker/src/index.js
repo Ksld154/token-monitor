@@ -121,6 +121,64 @@ export class HubDO {
   async fetch(request) {
     const url = new URL(request.url);
 
+    if (url.pathname === '/icon.svg') {
+      const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+        <defs>
+          <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stop-color="#60a5fa" />
+            <stop offset="100%" stop-color="#a78bfa" />
+          </linearGradient>
+          <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+            <feGaussianBlur stdDeviation="16" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="over" />
+          </filter>
+        </defs>
+        <rect width="512" height="512" rx="128" fill="#090d16" />
+        <circle cx="256" cy="256" r="160" fill="none" stroke="url(#grad)" stroke-width="24" filter="url(#glow)" />
+        <path d="M200 340 L200 240 M256 340 L256 160 M312 340 L312 210" stroke="url(#grad)" stroke-width="24" stroke-linecap="round" stroke-linejoin="round" />
+      </svg>`;
+      return new Response(svg, { headers: { 'content-type': 'image/svg+xml', 'cache-control': 'public, max-age=86400' } });
+    }
+
+    if (url.pathname === '/manifest.json') {
+      const secret = url.searchParams.get('secret') || '';
+      const manifest = {
+        name: "Token Monitor",
+        short_name: "TokenMonitor",
+        description: "Cloud-sync token usage monitoring dashboard.",
+        start_url: secret ? '/?secret=' + secret : '/',
+        display: "standalone",
+        orientation: "portrait-primary",
+        background_color: "#090d16",
+        theme_color: "#090d16",
+        icons: [
+          {
+            src: "/icon.svg",
+            sizes: "any",
+            type: "image/svg+xml",
+            purpose: "any maskable"
+          }
+        ]
+      };
+      return new Response(JSON.stringify(manifest, null, 2), { headers: { 'content-type': 'application/json; charset=utf-8' } });
+    }
+
+    if (url.pathname === '/sw.js') {
+      const sw = `self.addEventListener('install', (e) => {
+        self.skipWaiting();
+      });
+
+      self.addEventListener('activate', (e) => {
+        e.waitUntil(clients.claim());
+      });
+
+      self.addEventListener('fetch', (e) => {
+        // Pass-through fetch handler to satisfy PWA criteria
+        e.respondWith(fetch(e.request));
+      });`;
+      return new Response(sw, { headers: { 'content-type': 'application/javascript; charset=utf-8' } });
+    }
+
     if (url.pathname === '/' || url.pathname === '/index.html') {
       if (!isAuthorized(request, this.secret)) {
         return new Response('Unauthorized - Please provide ?secret=your_secret in URL', {
@@ -138,6 +196,11 @@ export class HubDO {
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
         <title>Token Monitor Mobile</title>
+        <meta name="theme-color" content="#090d16">
+        <meta name="apple-mobile-web-app-capable" content="yes">
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+        <link rel="apple-touch-icon" href="/icon.svg">
+        <link rel="manifest" href="/manifest.json?secret=${this.secret}">
         <style>
           @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
@@ -985,6 +1048,15 @@ export class HubDO {
 
           // Start SSE connection
           startSSE();
+
+          // Register PWA Service Worker
+          if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+              navigator.serviceWorker.register('/sw.js?secret=' + encodeURIComponent(SECRET))
+                .then(reg => console.log('PWA Service Worker registered:', reg.scope))
+                .catch(err => console.error('PWA Service Worker registration failed:', err));
+            });
+          }
         </script>
       </body>
       </html>`;
