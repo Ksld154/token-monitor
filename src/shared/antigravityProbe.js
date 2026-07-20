@@ -268,9 +268,8 @@ const CC_MODEL_BLACKLIST = new Set([
 
 function poolForModel(label, modelId) {
   const lc = `${label || ''} ${modelId || ''}`.toLowerCase();
-  if (lc.includes('gemini') && lc.includes('pro')) return 'Gemini Pro';
-  if (lc.includes('gemini') && lc.includes('flash')) return 'Gemini Flash';
-  return 'Claude';
+  if (lc.includes('gemini')) return 'Gemini session';
+  return 'Claude/GPT session';
 }
 
 function parseResetTime(value) {
@@ -303,14 +302,39 @@ function collapsePools(models) {
     const name = poolForModel(m.label, m.modelId);
     const existing = pools.get(name);
     if (!existing || m.remainingFraction < existing.remainingFraction) {
-      pools.set(name, { name, remainingFraction: m.remainingFraction, resetTime: m.resetTime });
+      pools.set(name, { name, kind: 'session', remainingFraction: m.remainingFraction, resetTime: m.resetTime });
     } else if (m.remainingFraction === existing.remainingFraction && m.resetTime && existing.resetTime && m.resetTime < existing.resetTime) {
       // tie-break: earlier reset wins
-      pools.set(name, { name, remainingFraction: m.remainingFraction, resetTime: m.resetTime });
+      pools.set(name, { name, kind: 'session', remainingFraction: m.remainingFraction, resetTime: m.resetTime });
     }
   }
-  const order = ['Gemini Pro', 'Gemini Flash', 'Claude'];
+  const order = ['Gemini session', 'Claude/GPT session'];
   return order.flatMap((name) => (pools.has(name) ? [pools.get(name)] : []));
+}
+
+function getWeeklyPools(planStatus) {
+  const pools = [];
+  if (planStatus) {
+    if (typeof planStatus.availablePromptCredits === 'number') {
+      const remaining = planStatus.availablePromptCredits;
+      pools.push({
+        name: 'Gemini weekly',
+        kind: 'weekly',
+        remainingFraction: Math.max(0, Math.min(1, remaining / 500)),
+        resetTime: null
+      });
+    }
+    if (typeof planStatus.availableFlowCredits === 'number') {
+      const remaining = planStatus.availableFlowCredits;
+      pools.push({
+        name: 'Claude/GPT weekly',
+        kind: 'weekly',
+        remainingFraction: Math.max(0, Math.min(1, remaining / 100)),
+        resetTime: null
+      });
+    }
+  }
+  return pools;
 }
 
 function endpointCandidates(processInfo, listenPorts) {
@@ -335,7 +359,6 @@ const PROBE_METADATA = {
   ideVersion: 'unknown',
   locale: 'en'
 };
-
 async function probe(deps = {}) {
   const info = await (deps.detectProcessInfo || detectProcessInfo)(deps);
   const ports = await (deps.listeningPorts || listeningPorts)(info.pid, deps);
@@ -354,12 +377,17 @@ async function probe(deps = {}) {
           || null;
         const accountEmail = data.userStatus.email?.trim?.() || null;
         const models = modelsFromConfigs(configs);
-        if (models.length > 0) return { accountPlan, accountEmail, pools: collapsePools(models) };
+        const sessionPools = collapsePools(models);
+        const weeklyPools = getWeeklyPools(data.userStatus.planStatus);
+        if (sessionPools.length > 0 || weeklyPools.length > 0) {
+          return { accountPlan, accountEmail, pools: [...sessionPools, ...weeklyPools] };
+        }
       }
       // Fall back to GetCommandModelConfigs on the same endpoint.
       const fallback = await call({ ...candidate, method: 'GetCommandModelConfigs', body: { metadata: PROBE_METADATA } });
       const models = modelsFromConfigs(fallback?.clientModelConfigs);
-      if (models.length > 0) return { accountPlan: null, accountEmail: null, pools: collapsePools(models) };
+      const sessionPools = collapsePools(models);
+      if (sessionPools.length > 0) return { accountPlan: null, accountEmail: null, pools: sessionPools };
       lastError = errorWithStatus('unavailable', 'empty model configs');
     } catch (err) {
       lastError = err;
@@ -381,5 +409,6 @@ module.exports = {
   _modelsFromConfigs: modelsFromConfigs,
   _collapsePools: collapsePools,
   _poolForModel: poolForModel,
+  _getWeeklyPools: getWeeklyPools,
   _endpointCandidates: endpointCandidates
 };

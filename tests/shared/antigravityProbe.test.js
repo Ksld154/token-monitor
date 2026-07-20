@@ -235,7 +235,7 @@ test('_modelsFromConfigs filters blacklist and entries without quotaInfo', () =>
   assert.equal(out[1].modelId, 'MODEL_OPENAI_GPT_OSS_120B_MEDIUM');
 });
 
-test('_collapsePools maps Gemini Pro / Gemini Flash / Claude pools by lowest remainingFraction', () => {
+test('_collapsePools maps Gemini session / Claude/GPT session pools by lowest remainingFraction', () => {
   const models = [
     { label: 'Gemini 3 Pro (High)',   modelId: 'X', remainingFraction: 0.8, resetTime: '2026-06-03T03:00:00Z' },
     { label: 'Gemini 3 Pro (Medium)', modelId: 'X', remainingFraction: 0.4, resetTime: '2026-06-03T02:00:00Z' },
@@ -244,20 +244,20 @@ test('_collapsePools maps Gemini Pro / Gemini Flash / Claude pools by lowest rem
     { label: 'GPT-OSS 120B',          modelId: 'X', remainingFraction: 0.6, resetTime: '2026-06-03T05:00:00Z' }
   ];
   const pools = probe._collapsePools(models);
-  assert.deepEqual(pools.map((p) => p.name), ['Gemini Pro', 'Gemini Flash', 'Claude']);
+  assert.deepEqual(pools.map((p) => p.name), ['Gemini session', 'Claude/GPT session']);
   assert.equal(pools[0].remainingFraction, 0.4);
   assert.equal(pools[0].resetTime, '2026-06-03T02:00:00Z');
-  assert.equal(pools[1].remainingFraction, 0.9);
-  assert.equal(pools[2].remainingFraction, 0.6);
+  assert.equal(pools[1].remainingFraction, 0.6);
+  assert.equal(pools[1].resetTime, '2026-06-03T05:00:00Z');
 });
 
 test('_collapsePools omits pools that have no model in the response', () => {
   const models = [{ label: 'Claude Opus', modelId: 'X', remainingFraction: 0.5, resetTime: null }];
   const pools = probe._collapsePools(models);
-  assert.deepEqual(pools.map((p) => p.name), ['Claude']);
+  assert.deepEqual(pools.map((p) => p.name), ['Claude/GPT session']);
 });
 
-test('probe returns plan + 3 pools when GetUserStatus succeeds', async () => {
+test('probe returns plan + pools when GetUserStatus succeeds', async () => {
   const result = await probe.probe({
     detectProcessInfo: async () => ({ pid: 1, csrfToken: 'csrf', extensionPort: null }),
     listeningPorts: async () => [54733],
@@ -265,7 +265,11 @@ test('probe returns plan + 3 pools when GetUserStatus succeeds', async () => {
       assert.equal(method, 'GetUserStatus');
       return {
         userStatus: {
-          planStatus: { planInfo: { planName: 'Pro' } },
+          planStatus: {
+            planInfo: { planName: 'Pro' },
+            availablePromptCredits: 450,
+            availableFlowCredits: 80
+          },
           cascadeModelConfigData: {
             clientModelConfigs: [
               { label: 'Gemini 3 Pro (High)',   modelOrAlias: { model: 'MA' }, quotaInfo: { remainingFraction: 0.5, resetTime: '2026-06-03T02:00:00Z' } },
@@ -278,7 +282,9 @@ test('probe returns plan + 3 pools when GetUserStatus succeeds', async () => {
     }
   });
   assert.equal(result.accountPlan, 'Pro');
-  assert.deepEqual(result.pools.map((p) => p.name), ['Gemini Pro', 'Gemini Flash', 'Claude']);
+  assert.deepEqual(result.pools.map((p) => p.name), ['Gemini session', 'Claude/GPT session', 'Gemini weekly', 'Claude/GPT weekly']);
+  assert.equal(result.pools[2].remainingFraction, 0.9);
+  assert.equal(result.pools[3].remainingFraction, 0.8);
 });
 
 test('probe prefers userTier name and richer planInfo display fields', async () => {
@@ -333,7 +339,7 @@ test('probe falls back to GetCommandModelConfigs when GetUserStatus has no userS
   });
   assert.equal(callCount, 2);
   assert.equal(result.accountPlan, null);
-  assert.deepEqual(result.pools.map((p) => p.name), ['Claude']);
+  assert.deepEqual(result.pools.map((p) => p.name), ['Claude/GPT session']);
 });
 
 test('probe rethrows the last error when every endpoint fails', async () => {

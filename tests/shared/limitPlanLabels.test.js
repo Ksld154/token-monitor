@@ -78,7 +78,7 @@ test('Antigravity plan labels compact Google AI plan names for the provider row'
         accountPlan,
         accountEmail: 'a@b.com',
         pools: [
-          { name: 'Gemini Pro', remainingFraction: 0.5, resetTime: null }
+          { name: 'Gemini session', remainingFraction: 0.5, resetTime: null }
         ]
       })
     });

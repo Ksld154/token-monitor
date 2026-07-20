@@ -2115,7 +2115,7 @@ async function fetchAntigravityLimits(_options = {}, deps = {}) {
     const accountLabel = snapshot.accountPlan ? antigravityPlanLabelFromParts(snapshot.accountPlan) : '';
     const accountKeySeed = snapshot.accountEmail || snapshot.accountPlan || 'default';
     const windows = (snapshot.pools || []).map((pool) => ({
-      kind: 'weekly',
+      kind: pool.kind || 'weekly',
       label: pool.name,
       usedPercent: Math.max(0, Math.min(100, (1 - pool.remainingFraction) * 100)),
       resetsAt: pool.resetTime || null,

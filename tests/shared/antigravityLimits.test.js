@@ -18,15 +18,16 @@ test('fetchAntigravityLimits returns notConfigured when probe says LS not runnin
   assert.equal(result.windows.length, 0);
 });
 
-test('fetchAntigravityLimits returns ok with 3 weekly windows when probe succeeds', async () => {
+test('fetchAntigravityLimits returns ok with 4 windows when probe succeeds', async () => {
   const result = await fetchAntigravityLimits({}, {
     antigravityProbe: async () => ({
       accountPlan: 'Pro',
       accountEmail: 'a@b.com',
       pools: [
-        { name: 'Gemini Pro',   remainingFraction: 0.5, resetTime: '2026-06-03T02:00:00Z' },
-        { name: 'Gemini Flash', remainingFraction: 0.9, resetTime: '2026-06-03T01:00:00Z' },
-        { name: 'Claude',       remainingFraction: 0.7, resetTime: '2026-06-03T04:00:00Z' }
+        { name: 'Gemini session',     kind: 'session', remainingFraction: 0.5, resetTime: '2026-06-03T02:00:00Z' },
+        { name: 'Gemini weekly',      kind: 'weekly',  remainingFraction: 0.9, resetTime: null },
+        { name: 'Claude/GPT session', kind: 'session', remainingFraction: 0.7, resetTime: '2026-06-03T04:00:00Z' },
+        { name: 'Claude/GPT weekly',  kind: 'weekly',  remainingFraction: 0.8, resetTime: null }
       ]
     })
   });
@@ -34,14 +35,18 @@ test('fetchAntigravityLimits returns ok with 3 weekly windows when probe succeed
   assert.equal(result.status, 'ok');
   assert.equal(result.source, 'rpc');
   assert.equal(result.accountLabel, 'Pro');
-  assert.deepEqual(result.windows.map((w) => w.label), ['Gemini Pro', 'Gemini Flash', 'Claude']);
+  assert.deepEqual(result.windows.map((w) => w.label), ['Gemini session', 'Claude/GPT session', 'Gemini weekly', 'Claude/GPT weekly']);
+  assert.equal(result.windows[0].kind, 'session');
+  assert.equal(result.windows[1].kind, 'session');
+  assert.equal(result.windows[2].kind, 'weekly');
+  assert.equal(result.windows[3].kind, 'weekly');
   for (const window of result.windows) {
-    assert.equal(window.kind, 'weekly');
     assert.equal(window.windowMinutes, null);
   }
   assert.equal(Math.round(result.windows[0].usedPercent), 50);
-  assert.equal(Math.round(result.windows[1].usedPercent), 10);
-  assert.equal(Math.round(result.windows[2].usedPercent), 30);
+  assert.equal(Math.round(result.windows[1].usedPercent), 30);
+  assert.equal(Math.round(result.windows[2].usedPercent), 10);
+  assert.equal(Math.round(result.windows[3].usedPercent), 20);
 });
 
 test('fetchAntigravityLimits maps unauthorized errors', async () => {
