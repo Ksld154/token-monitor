@@ -843,39 +843,13 @@ export class HubDO {
             const processedProviders = activeProviders.map(p => {
               const cp = { ...p, windows: [...p.windows] };
               if (p.provider === 'antigravity') {
-                // Find all Gemini windows
-                const geminiWindows = cp.windows.filter(w => String(w.label).toLowerCase().includes('gemini'));
-                // Filter out Gemini windows from the list
-                cp.windows = cp.windows.filter(w => !String(w.label).toLowerCase().includes('gemini'));
-                
-                if (geminiWindows.length > 0) {
-                  // Collapse Gemini windows into a single Gemini session window
-                  let minRemaining = 100;
-                  let earliestReset = null;
-                  
-                  geminiWindows.forEach(w => {
-                    if (w.remainingPercent !== null && w.remainingPercent < minRemaining) {
-                      minRemaining = w.remainingPercent;
-                    }
-                    if (w.resetsAt) {
-                      const d = new Date(w.resetsAt);
-                      if (!earliestReset || d < earliestReset) {
-                        earliestReset = d;
-                      }
-                    }
+                // Keep only Gemini windows and strip the 'Gemini' prefix from labels
+                cp.windows = cp.windows
+                  .filter(w => String(w.label).toLowerCase().includes('gemini'))
+                  .map(w => {
+                    const cleanLabel = String(w.label).replace(/gemini/i, '').trim();
+                    return { ...w, label: cleanLabel };
                   });
-                  
-                  cp.windows.push({
-                    kind: 'session',
-                    label: '',
-                    remainingPercent: minRemaining,
-                    usedPercent: 100 - minRemaining,
-                    used: null,
-                    limit: null,
-                    resetsAt: earliestReset ? earliestReset.toISOString() : null,
-                    resetDescription: '5hr'
-                  });
-                }
               }
               return cp;
             });
