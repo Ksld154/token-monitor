@@ -30,7 +30,7 @@ const { startCollector, lookupModelPricing, normalizeHistoryIntervalMs } = requi
 const { customPricingPath } = require('../shared/tokscaleConfig');
 const { applyCustomPricing, normalizeCustomPricingSetting } = require('../shared/tokscaleCustomPricing');
 const { createHub } = require('../hub/server');
-const { collectLimitsOnce, deepseekToken, normalizeLimitsRefreshMs, parseBoolean, parseLimitProviders, runCodexLogin, minimaxToken, copilotToken, zaiToken, zaiRegion, zaiTeamToken, volcengineCredentials, qoderCookie, kimiToken, ollamaSessionCookie } = require('../shared/limitCollector');
+const { collectLimitsOnce, deepseekToken, normalizeLimitsRefreshMs, parseBoolean, parseLimitProviders, runCodexLogin, minimaxToken, copilotToken, zaiToken, zaiRegion, zaiTeamToken, volcengineCredentials, qoderCookie, kimiToken, kimiWebToken, ollamaSessionCookie } = require('../shared/limitCollector');
 const { mergeCodexTransientWindows } = require('../shared/limits');
 const { fetchOllamaLimits, rememberOllamaValidation } = require('../shared/ollamaLimits');
 const { copilotLoginErrorMessage, isAllowedVerificationUrl, runCopilotDeviceFlowLogin } = require('../shared/copilotDeviceFlow');
@@ -260,6 +260,7 @@ function defaultSettings() {
     homeModuleOrder: defaultHomeModulePreferences().homeModuleOrder,
     hiddenHomeModules: defaultHomeModulePreferences().hiddenHomeModules,
     showHomeLimitBars: false,
+    showHomeLimitProviderNames: false,
     projectsEnabled: parseBoolean(process.env.TOKEN_MONITOR_PROJECTS_ENABLED, false),
     historyEnabled: true,
     historyIntervalMs: normalizeHistoryIntervalMs(process.env.TOKEN_MONITOR_HISTORY_INTERVAL_MS),
@@ -315,6 +316,7 @@ function defaultSettings() {
     qoderCookie: '',
     qoderSite: 'global',
     kimiApiKey: '',
+    kimiWebAccessToken: '',
     ollamaCookie: '',
     codexManagedAccounts: [],
     mimoManagedAccounts: [],
@@ -458,6 +460,14 @@ function normalizeKimiApiKey(value) {
 
 function currentKimiApiKey() {
   return settings?.kimiApiKey || kimiToken(process.env);
+}
+
+function normalizeKimiWebAccessToken(value) {
+  return kimiWebToken({}, String(value || ''));
+}
+
+function currentKimiWebAccessToken() {
+  return settings?.kimiWebAccessToken || kimiWebToken(process.env);
 }
 
 function normalizeCopilotEnterpriseHost(value) {
@@ -1533,6 +1543,7 @@ function readSettings() {
       merged.hiddenHomeModules = normalizeHiddenHomeModules(saved.hiddenHomeModules, DEFAULT_HOME_MODULE_LIST);
     }
     merged.showHomeLimitBars = parseBoolean(merged.showHomeLimitBars, false);
+    merged.showHomeLimitProviderNames = parseBoolean(merged.showHomeLimitProviderNames, false);
     if (saved.homeLimitProviderOrder !== undefined) {
       merged.homeLimitProviderOrder = migrateHomeLimitProviderOrder(saved.homeLimitProviderOrder);
     }
@@ -2003,6 +2014,7 @@ function startSyncCollector() {
     qoderCookie: settings.qoderCookie || '',
     qoderSite: settings.qoderSite || 'global',
     kimiApiKey: settings.kimiApiKey || '',
+    kimiWebAccessToken: settings.kimiWebAccessToken || '',
     ollamaCookie: settings.ollamaCookie || '',
     codexManagedAccounts: codexManagedAccountsForCollector(),
     mimoManagedAccounts: mimoManagedAccountsForCollector(),
@@ -2078,6 +2090,7 @@ function startHostCollector() {
     qoderCookie: settings.qoderCookie || '',
     qoderSite: settings.qoderSite || 'global',
     kimiApiKey: settings.kimiApiKey || '',
+    kimiWebAccessToken: settings.kimiWebAccessToken || '',
     ollamaCookie: settings.ollamaCookie || '',
     codexManagedAccounts: codexManagedAccountsForCollector(),
     mimoManagedAccounts: mimoManagedAccountsForCollector(),
@@ -2316,6 +2329,7 @@ function startLocalCollector() {
     qoderCookie: settings.qoderCookie || '',
     qoderSite: settings.qoderSite || 'global',
     kimiApiKey: settings.kimiApiKey || '',
+    kimiWebAccessToken: settings.kimiWebAccessToken || '',
     ollamaCookie: settings.ollamaCookie || '',
     codexManagedAccounts: codexManagedAccountsForCollector(),
     mimoManagedAccounts: mimoManagedAccountsForCollector(),
@@ -2560,6 +2574,11 @@ function settingsForRenderer() {
     : kimiToken(process.env)
       ? 'env'
       : '';
+  const kimiWebAccessTokenSource = settings?.kimiWebAccessToken
+    ? 'settings'
+    : kimiWebToken(process.env)
+      ? 'env'
+      : '';
   // Default-deny every credential field added to the canonical store. The two
   // hub secrets remain explicit exceptions because the existing sync UI must
   // prefill/copy them; provider credentials only cross as blank/configured state.
@@ -2601,6 +2620,10 @@ function settingsForRenderer() {
     ollamaCookieSource,
     kimiApiKeyConfigured: Boolean(currentKimiApiKey()),
     kimiApiKeySource,
+    kimiWebAccessTokenConfigured: Boolean(currentKimiWebAccessToken()),
+    kimiWebAccessTokenSource,
+    kimiCredentialConfigured: Boolean(currentKimiWebAccessToken() || currentKimiApiKey()),
+    kimiCredentialSource: kimiWebAccessTokenSource || kimiApiKeySource,
     currencyRatesEffective: effectiveRates || resolveEffectiveRates(rateCache?.rates || {}, settings?.currencyRates || {}),
     currencyRateInfo: rateCache ? { source: rateCache.source, date: rateCache.date, fetchedAt: rateCache.fetchedAt } : null,
     windowToggleShortcutStatus: currentWindowToggleShortcutStatus()
@@ -3803,6 +3826,7 @@ app.whenReady().then(() => {
     const previousQoderCookie = settings.qoderCookie;
     const previousQoderSite = settings.qoderSite;
     const previousKimiApiKey = settings.kimiApiKey;
+    const previousKimiWebAccessToken = settings.kimiWebAccessToken;
     const previousOllamaCookie = settings.ollamaCookie;
     const previousDiscordRpcEnabled = settings.discordRpcEnabled;
     const previousShowTrayIcon = settings.showTrayIcon;
@@ -3833,6 +3857,7 @@ app.whenReady().then(() => {
     if (patch.qoderCookie !== undefined) normalizedPatch.qoderCookie = normalizeQoderCookie(patch.qoderCookie);
     if (patch.qoderSite !== undefined) normalizedPatch.qoderSite = normalizeQoderSite(patch.qoderSite);
     if (patch.kimiApiKey !== undefined) normalizedPatch.kimiApiKey = normalizeKimiApiKey(patch.kimiApiKey);
+    if (patch.kimiWebAccessToken !== undefined) normalizedPatch.kimiWebAccessToken = normalizeKimiWebAccessToken(patch.kimiWebAccessToken);
     if (patch.ollamaCookie !== undefined) normalizedPatch.ollamaCookie = normalizeOllamaCookie(patch.ollamaCookie);
     if (patch.collectionMode !== undefined) normalizedPatch.collectionMode = normalizeCollectionMode(patch.collectionMode, settings.collectionMode);
     if (patch.collectionIntervalMs !== undefined) normalizedPatch.collectionIntervalMs = normalizeCollectionIntervalMs(patch.collectionIntervalMs, settings.collectionIntervalMs);
@@ -3868,6 +3893,7 @@ app.whenReady().then(() => {
       homeModuleOrder: patch.homeModuleOrder !== undefined ? normalizeHomeModuleOrder(patch.homeModuleOrder, DEFAULT_HOME_MODULE_LIST).join(',') : normalizeHomeModuleOrder(settings.homeModuleOrder, DEFAULT_HOME_MODULE_LIST).join(','),
       hiddenHomeModules: patch.hiddenHomeModules !== undefined ? normalizeHiddenHomeModules(patch.hiddenHomeModules, DEFAULT_HOME_MODULE_LIST) : normalizeHiddenHomeModules(settings.hiddenHomeModules, DEFAULT_HOME_MODULE_LIST),
       showHomeLimitBars: parseBoolean(patch.showHomeLimitBars ?? settings.showHomeLimitBars, false),
+      showHomeLimitProviderNames: parseBoolean(patch.showHomeLimitProviderNames ?? settings.showHomeLimitProviderNames, false),
       homeLimitProviderOrder: patch.homeLimitProviderOrder !== undefined ? migrateHomeLimitProviderOrder(patch.homeLimitProviderOrder) : (settings.homeLimitProviderOrder || ''),
       hiddenHomeLimitProviders: patch.hiddenHomeLimitProviders !== undefined ? normalizeHiddenLimitProviders(patch.hiddenHomeLimitProviders) : normalizeHiddenLimitProviders(settings.hiddenHomeLimitProviders),
       homeLimitAccountCount: normalizeHomeLimitAccountCount(patch.homeLimitAccountCount ?? settings.homeLimitAccountCount),
@@ -3980,6 +4006,7 @@ app.whenReady().then(() => {
       settings.qoderCookie !== previousQoderCookie ||
       settings.qoderSite !== previousQoderSite ||
       settings.kimiApiKey !== previousKimiApiKey ||
+      settings.kimiWebAccessToken !== previousKimiWebAccessToken ||
       settings.ollamaCookie !== previousOllamaCookie
     ) {
       startMode();

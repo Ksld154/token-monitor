@@ -82,7 +82,7 @@ Token Monitor 对「Token 用量」「账户额度」和「session 明细」分�
 ## 功能特性
 
 - **实时 Token 追踪**：覆盖 Claude Code、Codex、Hermes Agent、OpenCode、OpenClaw、Cursor、Antigravity、Cline、Kimi、Qwen、Grok Build、GitHub Copilot、Pi、Zed、Kilo Code、MiMo Code、ZCode、Kiro、CodeBuddy、WorkBuddy、Proma（每轮对话后 UI 在数秒内刷新）
-- **WSL 用量（Windows）**：在运行中的 WSL 发行版里使用的 AI 工具用量会自动识别并并入总量（随定期扫描刷新，约每 5 分钟一次）
+- **WSL 用量（Windows）**：运行中 WSL 发行版里的文件型用量会自动识别，约每 5 分钟并入总量；OpenCode、Hermes 等 SQLite 来源可能需要按照[指南](docs/wsl-sqlite-setup.zh-CN.md)在 WSL 内运行 headless agent
 - **多设备实时同步**：通过 Server-Sent Events 推送
 - **分组统计视图**：可按工具、设备、模型、session 或账户额度分组
 - **单个 session 明细**：点进 Claude Code、Codex 或 OpenCode 的 session，可看每条提问的 Token 消耗，并展开查看每次回复的 Token 拆分与用到的工具（打开时才实时读取本机 transcript 或数据库，绝不同步）
@@ -109,6 +109,7 @@ Token Monitor 对「Token 用量」「账户额度」和「session 明细」分�
 从 [GitHub Releases](https://github.com/Javis603/token-monitor/releases) 下载。
 
 - **macOS（Apple Silicon）** — `.dmg`，已签名并 notarize
+- **macOS（Intel）** — x64 `.dmg`，已签名并 notarize
 - **Windows 10/11** — 安装版和便携版 `.exe`，均已通过 [SignPath Foundation](docs/code-signing.md) 签名
 - **Linux x64** — `.AppImage`
 
@@ -169,10 +170,11 @@ App 状态保存在系统的用户数据目录——卸载时一并删除该目�
 
 ```bash
 npm install
-npm run dist:mac   # macOS arm64 .dmg → dist/
-npm run dist:win   # Windows x64 安装包 .exe → dist/
-npm run dist:linux # Linux x64 AppImage → dist/
-npm run pack       # 未打包的 app 目录（无安装包），方便本机快速测试
+npm run dist:mac     # macOS arm64 .dmg → dist/
+npm run dist:mac:x64 # macOS Intel x64 .dmg → dist/
+npm run dist:win     # Windows x64 安装包 .exe → dist/
+npm run dist:linux   # Linux x64 AppImage → dist/
+npm run pack         # 未打包的 app 目录（无安装包），方便本机快速测试
 ```
 
 产物会放在 `dist/`。Windows 和 Linux 请在对应系统上使用上面的 `dist:*` 脚本。如果要打包 macOS 发布版，需要本机有 Developer ID Application 签名身份；本地开发或未列出的平台请用 `npm start` 运行。

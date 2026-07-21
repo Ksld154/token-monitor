@@ -40,7 +40,7 @@ const { qoderCookie, fetchQoderLimits } = qoderLimits;
 const ollamaLimits = require('./ollamaLimits');
 const { ollamaSessionCookie, fetchOllamaLimits } = ollamaLimits;
 const kimiLimits = require('./kimiLimits');
-const { kimiToken, fetchKimiLimits } = kimiLimits;
+const { kimiToken, kimiWebToken, fetchKimiLimits } = kimiLimits;
 const {
   grokCredential,
   readAuthJson,
@@ -2065,9 +2065,28 @@ async function fetchLiveCodexAccount(deps = {}, nowMs = Date.now()) {
 
 async function fetchCodexLimits(options = {}, deps = {}) {
   const nowMs = (deps.now || Date.now)();
+  const scope = options.limitRefreshScope?.provider === 'codex'
+    ? options.limitRefreshScope
+    : null;
   const managedAccounts = normalizeCodexManagedAccounts(options.codexManagedAccounts || deps.codexManagedAccounts)
-    .filter((account) => account.enabled !== false);
-  const includeLiveAccount = options.includeLiveCodexAccount !== false;
+    .filter((account) => account.enabled !== false)
+    .filter((account) => {
+      if (!scope) return true;
+      if (scope.sourceDetail && scope.sourceDetail !== 'managed') return false;
+      const accountKey = codexAccountKeyFromSeed(account.accountKey || account.email || account.id || account.homePath);
+      if (scope.accountKey) return accountKey === scope.accountKey;
+      if (scope.accountEmail) return account.email === scope.accountEmail;
+      if (scope.accountLabel) return account.accountLabel === scope.accountLabel;
+      return false;
+    });
+  let includeLiveAccount = options.includeLiveCodexAccount !== false;
+  if (scope) {
+    if (scope.sourceDetail) {
+      includeLiveAccount = includeLiveAccount && scope.sourceDetail !== 'managed';
+    } else if (scope.accountKey) {
+      includeLiveAccount = includeLiveAccount && readLiveCodexIdentity(deps).accountKey === scope.accountKey;
+    }
+  }
   // Single live account: keep the original single-provider shape (and error
   // propagation) so a signed-out/not-configured state surfaces as before.
   if (managedAccounts.length === 0) {
@@ -2114,18 +2133,32 @@ async function fetchAntigravityLimits(_options = {}, deps = {}) {
     const snapshot = await probeFn(deps);
     const accountLabel = snapshot.accountPlan ? antigravityPlanLabelFromParts(snapshot.accountPlan) : '';
     const accountKeySeed = snapshot.accountEmail || snapshot.accountPlan || 'default';
-    const windows = (snapshot.pools || []).map((pool) => ({
-      kind: 'weekly',
-      label: pool.name,
-      usedPercent: Math.max(0, Math.min(100, (1 - pool.remainingFraction) * 100)),
-      resetsAt: pool.resetTime || null,
-      windowMinutes: null
-    }));
+    const windows = Array.isArray(snapshot.windows)
+      ? snapshot.windows.map((window) => ({
+          kind: window.kind,
+          label: window.name,
+          usedPercent: typeof window.remainingFraction === 'number'
+            ? Math.max(0, Math.min(100, (1 - window.remainingFraction) * 100))
+            : null,
+          resetsAt: window.resetTime || null,
+          resetDescription: window.resetDescription || '',
+          windowMinutes: window.kind === 'session' ? 300 : window.kind === 'weekly' ? 10_080 : null,
+          showMeter: window.showMeter !== false
+        }))
+      : (snapshot.pools || []).map((pool) => ({
+          kind: 'weekly',
+          label: pool.name,
+          usedPercent: Math.max(0, Math.min(100, (1 - pool.remainingFraction) * 100)),
+          resetsAt: pool.resetTime || null,
+          windowMinutes: null
+        }));
     return normalizeLimitProvider({
       provider: 'antigravity',
       accountKey: hashKey('antigravity', accountKeySeed),
       accountLabel,
+      accountEmail: snapshot.accountEmail || '',
       source: 'rpc',
+      sourceDetail: snapshot.sourceDetail || '',
       status: 'ok',
       updatedAt,
       windows
@@ -2168,10 +2201,20 @@ async function fetchOpenCodeLimits(options = {}, deps = {}) {
     cookies.push({ name: 'default (env)', cookie: envCookie });
   }
 
-  const goLocal = collectGo({ env: deps.env || process.env, now: () => nowMs });
+  const multiAccountMode = cookies.length > 1;
+  const scope = options.limitRefreshScope?.provider === 'opencode'
+    ? options.limitRefreshScope
+    : null;
+  if (scope && multiAccountMode) {
+    const profileName = scope.accountName || scope.accountLabel;
+    cookies = profileName
+      ? cookies.filter(({ name }) => name === profileName)
+      : [];
+  }
 
-  // ── Single account (<1 cookie): OLD merged behavior ──────────────────────
-  if (cookies.length <= 1) {
+  // ── Single account (0 or 1 cookie): existing merged behavior ─────────────
+  if (!multiAccountMode) {
+    const goLocal = collectGo({ env: deps.env || process.env, now: () => nowMs });
     const cookie = cookies[0]?.cookie;
     const [goWeb, zen] = cookie
       ? await Promise.all([
@@ -2260,16 +2303,19 @@ async function fetchSingleOpenCodeProfile(name, cookie, fetchGoWeb, fetchZen, no
     const { goWeb, zen } = result;
     const windows = [];
     let status = 'notConfigured';
+    let planLabel = '';
     let balanceUsd = null;
 
     if (goWeb && goWeb.status === 'ok' && goWeb.windows.length > 0) {
       windows.push(...goWeb.windows);
       status = 'ok';
+      planLabel = 'Go';
     }
 
     if (zen && zen.status === 'ok') {
       windows.push(...zen.windows);
       status = 'ok';
+      if (!planLabel) planLabel = 'Zen';
       if (typeof zen.balanceUsd === 'number' && Number.isFinite(zen.balanceUsd)) balanceUsd = zen.balanceUsd;
     }
 
@@ -2296,7 +2342,11 @@ async function fetchSingleOpenCodeProfile(name, cookie, fetchGoWeb, fetchZen, no
     return normalizeLimitProvider({
       provider: 'opencode',
       accountKey,
+      accountName: name,
+      // Keep accountLabel as the profile name for pre-accountName renderers.
+      // New renderers use planLabel for Go/Zen and accountName for identity.
       accountLabel: name,
+      planLabel,
       source: 'web',
       status,
       updatedAt,
@@ -2308,7 +2358,7 @@ async function fetchSingleOpenCodeProfile(name, cookie, fetchGoWeb, fetchZen, no
     const cookieHash = crypto.createHash('sha256').update(cookie).digest('hex').slice(0, 12);
     return normalizeLimitProvider({
       provider: 'opencode', accountKey: hashKey('opencode', `cookie:${cookieHash}`),
-      accountLabel: name, source: 'web', status: 'unavailable',
+      accountName: name, accountLabel: name, planLabel: '', source: 'web', status: 'unavailable',
       updatedAt, windows: [], balanceUsd: null
     });
   }
@@ -2437,7 +2487,10 @@ async function collectLimitsOnce(options = {}, deps = {}) {
     ...(deps.providerFetchers || {})
   };
   const providers = [];
-  for (const provider of parseLimitProviders(options.limitProviders ?? options.providers)) {
+  const scope = options.limitRefreshScope;
+  const selectedProviders = parseLimitProviders(options.limitProviders ?? options.providers)
+    .filter((provider) => !scope?.provider || provider === scope.provider);
+  for (const provider of selectedProviders) {
     try {
       const result = await fetchers[provider](options);
       if (Array.isArray(result)) providers.push(...result);
@@ -2447,6 +2500,46 @@ async function collectLimitsOnce(options = {}, deps = {}) {
     }
   }
   return normalizeLimitsSummary({ updatedAt: nowIso(nowMs), refreshMs, providers });
+}
+
+function limitProviderMatchesScope(provider, scope) {
+  if (!provider || provider.provider !== scope?.provider) return false;
+  if (scope.accountKey) return provider.accountKey === scope.accountKey;
+  if (scope.accountEmail) return provider.accountEmail === scope.accountEmail;
+  if (scope.accountName) return provider.accountName === scope.accountName;
+  if (scope.accountLabel) return provider.accountLabel === scope.accountLabel;
+  if (scope.sourceDetail) return provider.sourceDetail === scope.sourceDetail;
+  return true;
+}
+
+function mergeScopedLimits(cachedInput, partialInput, scope, nowMs) {
+  const partial = normalizeLimitsSummary(partialInput);
+  if (!cachedInput) return partial;
+  const cached = normalizeLimitsSummary(cachedInput);
+  const existingTarget = cached.providers.filter((provider) => limitProviderMatchesScope(provider, scope));
+  const refreshedTarget = mergeCodexTransientWindows({
+    updatedAt: cached.updatedAt,
+    refreshMs: cached.refreshMs,
+    providers: existingTarget
+  }, partial, nowMs).providers;
+  const providers = [];
+  let inserted = false;
+  for (const provider of cached.providers) {
+    if (!limitProviderMatchesScope(provider, scope)) {
+      providers.push(provider);
+      continue;
+    }
+    if (!inserted) {
+      providers.push(...refreshedTarget);
+      inserted = true;
+    }
+  }
+  if (!inserted) providers.push(...refreshedTarget);
+  return normalizeLimitsSummary({
+    updatedAt: partial.updatedAt,
+    refreshMs: cached.refreshMs,
+    providers
+  });
 }
 
 function createLimitsCollector(options = {}, deps = {}) {
@@ -2462,6 +2555,34 @@ function createLimitsCollector(options = {}, deps = {}) {
   let cached = options.previousLimits ? normalizeLimitsSummary(options.previousLimits) : null;
   let cachedAt = 0;
   let inFlight = null;
+  const scopedInFlight = new Map();
+
+  async function refreshScope(scope) {
+    const current = (deps.now || Date.now)();
+    if (!scope?.provider) throw new TypeError('limit refresh scope requires a provider');
+    if (scope.provider === 'mimo') {
+      // Validate before collectLimitsOnce converts provider errors into a
+      // status row. An ambiguous multi-account scope must leave the cache
+      // untouched instead of replacing every MiMo account or probing them all.
+      mimoLimits.scopedMimoManagedAccounts(
+        options.mimoManagedAccounts || deps.mimoManagedAccounts,
+        scope
+      );
+    }
+    if (inFlight) return inFlight;
+    const scopeKey = JSON.stringify(scope);
+    if (scopedInFlight.has(scopeKey)) return scopedInFlight.get(scopeKey);
+    const task = collectLimitsOnce({
+      ...options,
+      limitsRefreshMs: refreshMs,
+      limitRefreshScope: scope
+    }, deps).then((summary) => {
+      cached = mergeScopedLimits(cached, summary, scope, current);
+      return cached;
+    }).finally(() => { scopedInFlight.delete(scopeKey); });
+    scopedInFlight.set(scopeKey, task);
+    return task;
+  }
 
   async function snapshot(force = false) {
     const current = (deps.now || Date.now)();
@@ -2477,7 +2598,7 @@ function createLimitsCollector(options = {}, deps = {}) {
     return inFlight;
   }
 
-  return { snapshot };
+  return { refreshScope, snapshot };
 }
 
 function hashCursorAccountKey(account) {
@@ -2694,6 +2815,7 @@ module.exports = {
   ollamaSessionCookie,
   fetchOllamaLimits,
   kimiToken,
+  kimiWebToken,
   fetchKimiLimits,
   mapClaudeCliUsageToProvider,
   mapClaudeUsageToProvider,

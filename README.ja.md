@@ -82,7 +82,7 @@ Token Monitor は **トークン使用量**、**アカウント制限**、**セ�
 ## 機能
 
 - **リアルタイムトークン追跡** — Claude Code、Codex、Hermes Agent、OpenCode、OpenClaw、Cursor、Antigravity、Cline、Kimi、Qwen、Grok Build、GitHub Copilot、Pi、Zed、Kilo Code、MiMo Code、ZCode、Kiro、CodeBuddy、WorkBuddy、Proma（各ターンから数秒以内に UI 更新）
-- **WSL 使用量 (Windows)** — 実行中の WSL ディストリビューション内の AI ツール使用量を自動検出して合算（約 5 分ごとの定期スキャン）
+- **WSL 使用量 (Windows)** — 実行中の WSL ディストリビューションにあるファイルベースの使用量を約 5 分ごとに自動検出して合算。OpenCode や Hermes など SQLite ベースのツールでは、[WSL 内のヘッドレスエージェント](docs/wsl-sqlite-setup.md)が必要になる場合があります
 - **マルチデバイスリアルタイム同期** — Server-Sent Events
 - **内訳ビュー** — ツール、デバイス、モデル、セッション、アカウント制限別
 - **セッション別詳細** — Claude Code、Codex、OpenCode セッションでプロンプトごとのトークン、各応答のトークン分割・使用ツールまで展開（ローカル transcript/DB を必要時のみ読み込み、同期しない）
@@ -109,6 +109,7 @@ Token Monitor は **トークン使用量**、**アカウント制限**、**セ�
 [GitHub Releases](https://github.com/Javis603/token-monitor/releases) からダウンロードできます。
 
 - **macOS (Apple Silicon)** — `.dmg`、署名および notarize 済み
+- **macOS (Intel)** — x64 `.dmg`、署名および notarize 済み
 - **Windows 10/11** — インストーラー版とポータブル版の `.exe`、[SignPath Foundation](docs/code-signing.md) により署名済み
 - **Linux x64** — `.AppImage`
 
@@ -169,10 +170,11 @@ npx wrangler deploy
 
 ```bash
 npm install
-npm run dist:mac   # macOS arm64 .dmg          → dist/
-npm run dist:win   # Windows x64 installer .exe → dist/
-npm run dist:linux # Linux x64 AppImage        → dist/
-npm run pack       # インストーラーなしのアプリディレクトリ（ローカルテスト用）
+npm run dist:mac     # macOS arm64 .dmg           → dist/
+npm run dist:mac:x64 # macOS Intel x64 .dmg       → dist/
+npm run dist:win     # Windows x64 installer .exe → dist/
+npm run dist:linux   # Linux x64 AppImage         → dist/
+npm run pack         # インストーラーなしのアプリディレクトリ（ローカルテスト用）
 ```
 
 出力は `dist/` に生成されます。Windows と Linux は対象 OS 上で上記の対応する `dist:*` スクリプトを使います。macOS リリース版をパッケージングするには、この Mac に Developer ID Application の署名 ID が必要です。ローカル開発または未対応プラットフォームでは `npm start` を使ってください。

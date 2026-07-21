@@ -3,6 +3,7 @@
 const clientLabels = { claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes', gemini: 'Gemini', cursor: 'Cursor', opencode: 'OpenCode', openclaw: 'OpenClaw', antigravity: 'Antigravity', cline: 'Cline', kimi: 'Kimi', qwen: 'Qwen', grok: 'Grok Build', copilot: 'GitHub Copilot', pi: 'Pi', zed: 'Zed', kilocode: 'Kilo Code', micode: 'MiMo Code', zcode: 'ZCode', kiro: 'Kiro', codebuddy: 'CodeBuddy', workbuddy: 'WorkBuddy', proma: 'Proma' };
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
+const wslStatusPresentationApi = window.TokenMonitorWslStatusPresentation;
 const reducedMotionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const clientsWithIcon = new Set([
   'claude', 'codex', 'gemini', 'cursor', 'opencode', 'openclaw', 'hermes', 'antigravity', 'cline', 'kimi', 'qwen', 'grok', 'copilot', 'pi', 'zed', 'kilocode', 'micode', 'zcode', 'kiro', 'codebuddy', 'workbuddy', 'proma',
@@ -114,6 +115,7 @@ const LIMIT_CAPABILITY_TAG_KEYS = {
   'App/CLI RPC': 'settings.limits.capability.appCliRpc',
   'Manual login': 'settings.limits.capability.manualLogin',
   Web: 'settings.limits.capability.web',
+  'Web/API': 'settings.limits.capability.webApi',
   'App/CLI must be open': 'settings.limits.capability.appMustBeOpen',
   RPC: 'settings.limits.capability.rpc',
   'Local/Zen': 'settings.limits.capability.localZen',
@@ -121,12 +123,15 @@ const LIMIT_CAPABILITY_TAG_KEYS = {
   Subscription: 'settings.limits.capability.subscription',
   'Token Plan': 'settings.limits.capability.tokenPlan',
   'Coding Plan': 'settings.limits.capability.codingPlan',
+  'Membership/Coding Plan': 'settings.limits.capability.membershipCodingPlan',
   'API key': 'settings.limits.capability.apiKey',
   'AK/SK': 'settings.limits.capability.akSk',
   'GitHub OAuth': 'settings.limits.capability.githubOAuth',
   API: 'settings.limits.capability.api',
   'Add API key': 'settings.limits.status.addApiKey',
   'Update API key': 'settings.limits.status.updateApiKey',
+  'Add credential': 'settings.limits.status.addCredential',
+  'Update credential': 'settings.limits.status.updateCredential',
   Live: 'settings.limits.status.live',
   Linked: 'settings.limits.status.linked',
   'Sign in': 'settings.limits.status.signIn',
@@ -189,6 +194,7 @@ const SERVICE_STATUS_PLACEHOLDERS = [
 const SERVICE_PROVIDER_OPTIONS = SERVICE_STATUS_PLACEHOLDERS.map((entry) => ({ id: entry.id, label: entry.label }));
 const TOKEN_MONITOR_REPOSITORY_URL = 'https://github.com/Javis603/token-monitor';
 const TOKEN_MONITOR_ISSUES_URL = `${TOKEN_MONITOR_REPOSITORY_URL}/issues/new/choose`;
+const TOKEN_MONITOR_WSL_SQLITE_GUIDE_URL = `${TOKEN_MONITOR_REPOSITORY_URL}/blob/main/docs/wsl-sqlite-setup.md`;
 const serviceStatusProviderPreferencesApi = window.TokenMonitorServiceStatusProviderPreferences;
 const SETTINGS_SECTION_IDS = ['general', 'main', 'window', 'appearance', 'tools', 'limits', 'accounts', 'sync'];
 const REFRESH_BUTTON_FEEDBACK_MS = 700;
@@ -662,10 +668,9 @@ function syncCurrencyRateControls() {
 function formatTime(value) { const date = value ? new Date(value) : new Date(); return Number.isNaN(date.getTime()) ? '--:--:--' : date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
 function formatPercent(value) { return Number.isFinite(Number(value)) ? `${Math.round(Number(value))}%` : '--'; }
 function formatReset(value) {
-  const date = value ? new Date(value) : null;
-  if (!date || Number.isNaN(date.getTime())) return '';
-  const diffMs = date.getTime() - Date.now();
-  if (diffMs <= 0) return 'Reset now';
+  const diffMs = limitProviderPresentationApi.limitResetRemainingMs(value);
+  if (diffMs === null) return '';
+  if (diffMs === 0) return 'Reset now';
   return `Reset ${formatDuration(diffMs)}`;
 }
 function formatDuration(ms) {
@@ -1790,7 +1795,7 @@ function limitProviderMeta(provider, provenance = null) {
 
 function limitProviderPlan(provider) {
   if (provider?.status && provider.status !== 'ok' && !provider.stale) return limitStatusLabel(provider.status, false);
-  const label = String(provider?.accountLabel || '').trim();
+  const label = String(provider?.planLabel || provider?.accountLabel || '').trim();
   if (label) return limitProviderPresentationApi.limitProviderDisplayLabel(label);
   return provider?.status && provider.status !== 'ok' ? limitStatusLabel(provider.status, false) : '';
 }
@@ -1836,6 +1841,24 @@ function windowForKind(provider, kind) {
 
 function windowsForKind(provider, kind) {
   return (provider?.windows || []).filter((window) => window.kind === kind);
+}
+
+function antigravityQuotaGroups(provider) {
+  const entries = (provider?.windows || [])
+    .filter((window) => window.kind === 'session' || window.kind === 'weekly')
+    .map((window) => {
+      const presentation = limitProviderPresentationApi.antigravityQuotaWindow(window);
+      return presentation ? { ...presentation, window } : null;
+    });
+  // Legacy GetUserStatus pools have model names rather than group + period
+  // labels. Keep their existing flat layout instead of guessing a hierarchy.
+  if (entries.length === 0 || entries.some((entry) => entry === null)) return [];
+  const groups = new Map();
+  for (const entry of entries) {
+    if (!groups.has(entry.groupLabel)) groups.set(entry.groupLabel, []);
+    groups.get(entry.groupLabel).push(entry);
+  }
+  return [...groups].map(([label, windows]) => ({ label, windows }));
 }
 
 function formatLimitAmount(value) {
@@ -2110,7 +2133,9 @@ function limitWindowNode(label, window, color, tone = 1, valueOverride = null, d
   const meter = limitMeterNode(color, fillPercent, tone);
   const reset = document.createElement('div');
   reset.className = 'limit-reset';
-  const resetText = formatReset(window?.resetsAt) || window?.resetDescription || '';
+  const resetText = window?.resetsAt
+    ? formatReset(window.resetsAt)
+    : window?.resetDescription || '';
   if (detailText) {
     // Keep the reset text left-aligned (consistent with every other provider)
     // and add the absolute count on the right, under the top-line percentage.
@@ -2475,12 +2500,39 @@ function renderProviderWindows(provider, color) {
     }
   } else if (provider.provider === 'antigravity') {
     windows.classList.add('limit-windows-antigravity');
-    const weeklyWindows = windowsForKind(provider, 'weekly');
-    const visibleWindows = weeklyWindows.length > 0 ? weeklyWindows : [null];
-    for (const weekly of visibleWindows) {
-      const node = limitWindowNode(weekly?.label || 'Weekly', weekly, color, 0.78);
-      node.classList.add('limit-window-wide');
-      windows.append(node);
+    const quotaGroups = antigravityQuotaGroups(provider);
+    if (quotaGroups.length > 0) {
+      windows.classList.add('limit-windows-antigravity-grouped');
+      for (const group of quotaGroups) {
+        const groupNode = document.createElement('div');
+        groupNode.className = 'limit-window-group';
+        groupNode.setAttribute('role', 'group');
+        groupNode.setAttribute('aria-label', group.label);
+        const title = document.createElement('div');
+        title.className = 'limit-window-group-title';
+        title.textContent = group.label;
+        const groupWindows = document.createElement('div');
+        groupWindows.className = 'limit-window-group-items';
+        for (const entry of group.windows) {
+          const opacity = entry.window.kind === 'session' ? 0.95 : 0.78;
+          groupWindows.append(limitWindowNode(
+            entry.windowLabel,
+            { ...entry.window, label: entry.windowLabel },
+            color,
+            opacity
+          ));
+        }
+        groupNode.append(title, groupWindows);
+        windows.append(groupNode);
+      }
+    } else {
+      const weeklyWindows = windowsForKind(provider, 'weekly');
+      const visibleWindows = weeklyWindows.length > 0 ? weeklyWindows : [null];
+      for (const quotaWindow of visibleWindows) {
+        const node = limitWindowNode(quotaWindow?.label || 'Weekly', quotaWindow, color, 0.78);
+        node.classList.add('limit-window-wide');
+        windows.append(node);
+      }
     }
   } else if (provider.provider === 'opencode') {
     // Go reports session/weekly/monthly windows ($12/$30/$60); Zen reports a prepaid balance (and,
@@ -2652,6 +2704,32 @@ function renderProviderWindows(provider, color) {
       node.classList.add('limit-window-wide');
       windows.append(node);
     }
+  } else if (provider.provider === 'kimi') {
+    const fiveHour = windowForKind(provider, 'session');
+    const weekly = windowForKind(provider, 'weekly');
+    const monthly = windowForKind(provider, 'billing');
+    if (fiveHour) {
+      const node = limitWindowNode(fiveHour.label || '5-hour', fiveHour, color, 0.95);
+      if (!weekly) node.classList.add('limit-window-wide');
+      windows.append(node);
+    }
+    if (weekly) {
+      const node = limitWindowNode(weekly.label || 'Weekly', weekly, color, 0.68);
+      if (!fiveHour) node.classList.add('limit-window-wide');
+      windows.append(node);
+    }
+    if (monthly) {
+      const node = limitWindowNode(
+        monthly.label || 'Monthly',
+        monthly,
+        color,
+        0.5,
+        null,
+        monthly.detail || ''
+      );
+      node.classList.add('limit-window-wide');
+      windows.append(node);
+    }
   } else if (provider.provider === 'ollama') {
     const session = windowForKind(provider, 'session');
     const weekly = windowForKind(provider, 'weekly');
@@ -2764,6 +2842,18 @@ function renderMimoAccountGroup(label, providers, color) {
   return row;
 }
 
+function opencodeAccountTitle(provider, index) {
+  const name = String(provider?.accountName || '').trim();
+  if (name) return name;
+  // Older synced clients put the user-defined profile name in accountLabel.
+  // Keep those rows identifiable while new clients carry profile and plan in
+  // separate fields. Go/Zen are plan labels, never account identities.
+  const legacyName = String(provider?.accountLabel || '').trim();
+  return legacyName && legacyName !== 'Go' && legacyName !== 'Zen'
+    ? legacyName
+    : `Account ${index + 1}`;
+}
+
 function renderOpenCodeAccountGroup(label, providers, color) {
   const row = document.createElement('div');
   row.className = 'limit-row limit-row-group';
@@ -2774,10 +2864,15 @@ function renderOpenCodeAccountGroup(label, providers, color) {
   });
   const accountList = document.createElement('div');
   accountList.className = 'limit-account-list';
-  providers.forEach((provider) => {
-    accountList.append(renderLimitProviderRow('opencode', provider.accountLabel || 'OpenCode', provider, color, {
+  providers.forEach((provider, index) => {
+    const legacyProfileLabel = !provider?.accountName
+      && provider?.accountLabel
+      && provider.accountLabel !== 'Go'
+      && provider.accountLabel !== 'Zen';
+    accountList.append(renderLimitProviderRow('opencode', opencodeAccountTitle(provider, index), provider, color, {
       accountRow: true,
-      showIcon: false
+      showIcon: false,
+      ...(legacyProfileLabel ? { planText: '' } : {})
     }));
   });
   row.append(head, accountList);
@@ -3547,13 +3642,23 @@ function homeModuleShell(kind, title, viewId, meta = '') {
   return { module, body };
 }
 
+function homeLimitAccountTitle(id, provider, index) {
+  if (id === 'codex') return codexAccountTitle(provider, index);
+  if (id === 'mimo') return mimoAccountTitle(provider, index);
+  if (id === 'opencode') return opencodeAccountTitle(provider, index);
+  return String(provider?.accountEmail || provider?.accountName || '').trim() || `Account ${index + 1}`;
+}
+
 function homeLimitRows() {
   const enabled = enabledLimitProviderSet();
   const providerOrder = state.settings?.homeLimitProviderOrder || state.settings?.limitProviderOrder;
   const providerOptions = limitProviderOrderApi.orderedLimitProviders(LIMIT_PROVIDERS, providerOrder);
   const hasConfiguredOrder = Boolean(state.settings?.homeLimitProviderOrder);
   return homeOverviewApi.homeLimitAccountsForProviders({
-    providers: state.stats?.limits?.providers || [],
+    providers: (state.stats?.limits?.providers || []).map((provider) => ({
+      ...provider,
+      windows: limitProviderPresentationApi.limitProviderCompactWindows(provider, provider.windows)
+    })),
     providerOptions,
     enabledProviderIds: Array.from(enabled),
     hiddenProviderIds: Array.from(hiddenHomeLimitProviderSet()),
@@ -3563,12 +3668,21 @@ function homeLimitRows() {
     accountName: (provider, index, providerEntries) => {
       const id = String(provider?.provider || '').trim().toLowerCase();
       const option = providerOptions.find((entry) => entry.id === id);
-      return id === 'codex' && providerEntries.length > 1 ? codexAccountTitle(provider, index) : option?.label || id;
+      const providerTitle = option?.label || id;
+      if (providerEntries.length > 1) {
+        const accountTitle = homeLimitAccountTitle(id, provider, index);
+        return state.settings?.showHomeLimitProviderNames === true || state.settings?.showToolIcons === false
+          ? `${providerTitle} · ${accountTitle}`
+          : accountTitle;
+      }
+      return providerTitle;
     }
   });
 }
 
-function homeLimitWindowLabel(window) {
+function homeLimitWindowLabel(window, providerId = '', visibleWindows = []) {
+  const compactLabel = limitProviderPresentationApi.limitProviderCompactWindowLabel(providerId, window, visibleWindows);
+  if (compactLabel) return compactLabel;
   if (window?.kind === 'billing') {
     const label = String(window?.label || '').trim();
     if (label) return label;
@@ -3614,7 +3728,7 @@ function renderHomeLimitModule() {
       line.className = 'home-limit-window-line';
       const label = document.createElement('span');
       label.className = 'home-limit-window-label';
-      label.textContent = homeLimitWindowLabel(window);
+      label.textContent = homeLimitWindowLabel(window, row.providerId, row.windows);
       const value = document.createElement('span');
       value.className = 'home-list-value';
       const showUsed = Boolean(state.settings?.showLimitUsed);
@@ -3633,9 +3747,13 @@ function renderHomeLimitModule() {
       const resetAt = formatReset(window.resetsAt);
       const resetText = document.createElement('span');
       resetText.className = 'home-limit-reset';
-      resetText.textContent = resetAt || (window.resetDescription
+      const resetLabel = window.resetsAt
+        ? resetAt || '\u00a0'
+        : window.resetDescription
         ? t('home.reset', { value: window.resetDescription })
-        : '\u00a0');
+        : '\u00a0';
+      const periodLabel = limitProviderPresentationApi.limitProviderCompactWindowPeriodLabel(row.providerId, window, row.windows);
+      resetText.textContent = periodLabel && resetLabel !== '\u00a0' ? `${periodLabel} · ${resetLabel}` : resetLabel;
       metric.append(resetText);
       windows.append(metric);
     }
@@ -5801,6 +5919,33 @@ function renderHomeLimitProviderList() {
   statusText.textContent = t('settings.home.showLimitBars');
   statusInput.addEventListener('change', () => void saveSettings({ showHomeLimitBars: statusInput.checked }));
   statusLabel.append(statusInput, statusText);
+  const providerNamesLabel = document.createElement('label');
+  providerNamesLabel.className = 'checkbox-label home-limit-status-setting';
+  const providerNamesInput = document.createElement('input');
+  providerNamesInput.type = 'checkbox';
+  const providerNamesRequired = state.settings?.showToolIcons === false;
+  providerNamesInput.checked = providerNamesRequired || state.settings?.showHomeLimitProviderNames === true;
+  providerNamesInput.disabled = providerNamesRequired;
+  const providerNamesText = document.createElement('span');
+  providerNamesText.textContent = t('settings.home.showLimitProviderNames');
+  const providerNamesCopy = document.createElement('span');
+  providerNamesCopy.className = 'home-limit-provider-names-copy';
+  providerNamesCopy.append(providerNamesText);
+  if (providerNamesRequired) {
+    const requiredReason = t('settings.home.providerNamesRequiredWithoutIcons');
+    const requiredReasonText = document.createElement('span');
+    requiredReasonText.id = 'homeLimitProviderNamesReason';
+    requiredReasonText.className = 'home-limit-provider-names-reason';
+    requiredReasonText.textContent = requiredReason;
+    providerNamesCopy.append(requiredReasonText);
+    providerNamesLabel.title = requiredReason;
+    providerNamesInput.setAttribute('aria-describedby', requiredReasonText.id);
+  }
+  providerNamesInput.addEventListener('change', async () => {
+    await saveSettings({ showHomeLimitProviderNames: providerNamesInput.checked });
+    renderHomeIfVisible();
+  });
+  providerNamesLabel.append(providerNamesInput, providerNamesCopy);
   const countLabel = document.createElement('label');
   countLabel.className = 'settings-item home-limit-account-count-setting';
   const countText = document.createElement('span');
@@ -5849,7 +5994,7 @@ function renderHomeLimitProviderList() {
   showAll.addEventListener('click', () => void showAllHomeLimitProviders());
   headerActions.append(reset, showAll);
   header.append(note, headerActions);
-  wrap.append(statusLabel, countLabel, header);
+  wrap.append(statusLabel, providerNamesLabel, countLabel, header);
   for (const { id, label, settingsLabel } of providers) {
     const isHidden = hidden.has(id);
     const row = document.createElement('div');
@@ -6249,6 +6394,20 @@ function renderWslPanel() {
       tag.textContent = t(has ? 'settings.collection.wslPanel.hasData' : 'settings.collection.wslPanel.noDataTag');
       row.append(name, tag);
       els.wslPanel.append(row);
+    }
+
+    if (wslStatusPresentationApi.sqliteHelpClients(status).length > 0) {
+      const help = document.createElement('p');
+      help.className = 'settings-note wsl-panel-help';
+      const message = document.createElement('span');
+      message.textContent = t('settings.collection.wslPanel.sqliteHelp');
+      const guide = document.createElement('button');
+      guide.type = 'button';
+      guide.className = 'inline-link';
+      guide.textContent = t('settings.collection.wslPanel.setupGuide');
+      guide.addEventListener('click', () => window.tokenMonitor.openExternal?.(TOKEN_MONITOR_WSL_SQLITE_GUIDE_URL));
+      help.append(message, ' ', guide);
+      els.wslPanel.append(help);
     }
   }
 }
@@ -7023,7 +7182,11 @@ for (const input of els.reduceMotionInputs || []) {
   });
 }
 els.liveDotInput.addEventListener('change', saveAppearanceFromControls);
-els.toolIconsInput.addEventListener('change', saveAppearanceFromControls);
+els.toolIconsInput.addEventListener('change', async () => {
+  state.settings.showToolIcons = els.toolIconsInput.checked;
+  renderHomeIfVisible();
+  await saveAppearanceFromControls();
+});
 els.titleIconInput.addEventListener('change', saveAppearanceFromControls);
 els.showCompactTotalTokensInput.addEventListener('change', async () => {
   await saveAppearanceFromControls();
@@ -7999,8 +8162,8 @@ const externalLimitAccountConfig = {
     pendingKey: 'qoderPendingCheckSince'
   },
   kimi: {
-    configuredKey: 'kimiApiKeyConfigured',
-    sourceKey: 'kimiApiKeySource',
+    configuredKey: 'kimiCredentialConfigured',
+    sourceKey: 'kimiCredentialSource',
     pendingKey: 'kimiPendingCheckSince'
   },
   ollama: {
@@ -9321,7 +9484,7 @@ function setupCursorAccountUI() {
     });
 
     document.getElementById('kimiLogoutButton').addEventListener('click', async () => {
-      await saveSettings({ kimiApiKey: '' });
+      await saveSettings({ kimiApiKey: '', kimiWebAccessToken: '' });
       clearExternalProviderCheckPending('kimi');
       clearExternalProviderPendingStatus('kimi');
       renderExternalProviderStatus('kimi');
@@ -9330,6 +9493,30 @@ function setupCursorAccountUI() {
 
     document.getElementById('kimiRefreshButton').addEventListener('click', async () => {
       await refreshStats({ force: true });
+    });
+
+    document.getElementById('kimiWebAccessTokenSubmit').addEventListener('click', async () => {
+      const input = document.getElementById('kimiWebAccessTokenInput');
+      const errorEl = document.getElementById('kimiErrorMessage');
+      errorEl.classList.add('hidden');
+      if (!String(input.value || '').trim()) {
+        errorEl.textContent = t('settings.kimi.statusNotSet');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        markExternalProviderCheckPending('kimi');
+        await saveSettings({ kimiWebAccessToken: input.value });
+        input.value = '';
+        renderExternalProviderStatus('kimi');
+        await refreshStats({ force: true });
+        setExternalAccountExpanded('kimi', !externalProviderAccountLinked('kimi'));
+        renderExternalProviderStatus('kimi');
+      } catch (err) {
+        clearExternalProviderCheckPending('kimi');
+        errorEl.textContent = t('settings.kimi.saveFailed', { message: err.message });
+        errorEl.classList.remove('hidden');
+      }
     });
 
     document.getElementById('kimiApiKeySubmit').addEventListener('click', async () => {

@@ -82,7 +82,7 @@ Token Monitor는 **토큰 사용량**, **계정 한도**, **세션 상세**를 �
 ## 기능
 
 - **실시간 토큰 추적** — Claude Code, Codex, Hermes Agent, OpenCode, OpenClaw, Cursor, Antigravity, Cline, Kimi, Qwen, Grok Build, GitHub Copilot, Pi, Zed, Kilo Code, MiMo Code, ZCode, Kiro, CodeBuddy, WorkBuddy, Proma (턴당 수 초 내 UI 갱신)
-- **WSL 사용량 (Windows)** — 실행 중인 WSL 배포판 안 AI 도구 사용량을 자동 감지해 합산 (약 5분마다 주기 스캔)
+- **WSL 사용량 (Windows)** — 실행 중인 WSL 배포판의 파일 기반 사용량을 약 5분마다 자동 감지해 합산합니다. OpenCode와 Hermes 같은 SQLite 기반 도구는 [WSL 내부 헤드리스 에이전트](docs/wsl-sqlite-setup.md)가 필요할 수 있습니다
 - **멀티 디바이스 실시간 동기화** — Server-Sent Events
 - **분류 보기** — 도구, 기기, 모델, 세션, 계정 한도별
 - **세션별 상세** — Claude Code, Codex, OpenCode 세션에서 프롬프트별 토큰, 응답별 토큰 분할·사용 도구까지 확장 (로컬 transcript/DB를 필요할 때만 읽으며 동기화하지 않음)
@@ -109,6 +109,7 @@ Token Monitor는 **토큰 사용량**, **계정 한도**, **세션 상세**를 �
 [GitHub Releases](https://github.com/Javis603/token-monitor/releases)에서 다운로드하세요.
 
 - **macOS (Apple Silicon)** — `.dmg`, 서명 및 notarize 완료
+- **macOS (Intel)** — x64 `.dmg`, 서명 및 notarize 완료
 - **Windows 10/11** — 설치용 및 휴대용 `.exe`, [SignPath Foundation](docs/code-signing.md)을 통해 서명됨
 - **Linux x64** — `.AppImage`
 
@@ -169,10 +170,11 @@ npx wrangler deploy
 
 ```bash
 npm install
-npm run dist:mac   # macOS arm64 .dmg          → dist/
-npm run dist:win   # Windows x64 installer .exe → dist/
-npm run dist:linux # Linux x64 AppImage        → dist/
-npm run pack       # 설치 없이 앱 디렉터리만 (로컬 테스트)
+npm run dist:mac     # macOS arm64 .dmg           → dist/
+npm run dist:mac:x64 # macOS Intel x64 .dmg       → dist/
+npm run dist:win     # Windows x64 installer .exe → dist/
+npm run dist:linux   # Linux x64 AppImage         → dist/
+npm run pack         # 설치 없이 앱 디렉터리만 (로컬 테스트)
 ```
 
 결과물은 `dist/`에 생성됩니다. Windows와 Linux는 대상 OS에서 위의 해당 `dist:*` 스크립트를 사용하세요. macOS 릴리스 빌드를 패키징하려면 이 Mac에 Developer ID Application 서명 ID가 있어야 합니다. 로컬 개발 또는 지원되지 않는 플랫폼에서는 `npm start`를 사용하세요.

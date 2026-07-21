@@ -230,6 +230,9 @@ test('Home limit provider settings stay compact and list only enabled providers'
   assert.match(homeLimitRows, /const hasConfiguredOrder = Boolean\(state\.settings\?\.homeLimitProviderOrder\)/);
   assert.doesNotMatch(homeLimitRows, /normalizeLimitProviderOrder\(state\.settings\?\.limitProviderOrder, LIMIT_PROVIDERS\)\.join\(','\) !== DEFAULT_LIMIT_PROVIDER_ORDER/);
   assert.match(homeLimitRows, /sort: hasConfiguredOrder \? 'configured' : 'remaining'/);
+  assert.match(homeLimitRows, /homeLimitAccountTitle\(id, provider, index\)/);
+  assert.match(homeLimitRows, /showHomeLimitProviderNames === true \|\| state\.settings\?\.showToolIcons === false/);
+  assert.match(homeLimitRows, /`\$\{providerTitle\} · \$\{accountTitle\}`/);
   assert.match(renderHomeLimitProviderList, /enabledLimitProviderSet\(\)/);
   assert.match(renderHomeLimitProviderList, /orderedLimitProviders\(LIMIT_PROVIDERS, homeLimitProviderOrderValue\(\)\)/);
   assert.match(renderHomeLimitProviderList, /const hasCustomOrder = Boolean\(state\.settings\?\.homeLimitProviderOrder\);/);
@@ -284,7 +287,7 @@ test('view switcher preserves click-to-cycle and direct selection without crowdi
   assert.match(cssRule(css, '.view-switcher'), /flex:\s*0 1 auto/);
   assert.match(cssRule(css, '.view-switcher-current'), /min-width:\s*0/);
   assert.match(cssRule(css, '.view-switcher-current'), /color:\s*var\(--muted\)/);
-  assert.doesNotMatch(cssRule(css, '.view-switcher-current'), /color:\s*var\(--green\)/);
+  assert.doesNotMatch(cssRule(css, '.view-switcher-current'), /color:\s*var\(--accent\)/);
   assert.match(cssRule(css, '.view-switcher-disclosure'), /flex:\s*0 0 24px/);
   assert.match(cssRule(css, '.view-switcher-menu'), /position:\s*absolute/);
   assert.match(cssRule(css, '.view-switcher-menu'), /width:\s*100%/);
