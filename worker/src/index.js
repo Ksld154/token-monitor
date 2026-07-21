@@ -754,15 +754,18 @@ export class HubDO {
               }
             }
             
-            if (!timeText && window.resetDescription) {
-              timeText = window.resetDescription;
+            if (timeText) {
+              return percentText + ' (' + timeText + ')';
             }
             
-            if (!timeText) {
-              timeText = window.kind || 'limit';
+            if (window.resetDescription) {
+              const desc = String(window.resetDescription).toLowerCase().trim();
+              if (desc && desc !== 'weekly' && desc !== '5-hour' && desc !== '5-hr' && desc !== '5hr' && desc !== 'session') {
+                return percentText + ' (' + window.resetDescription + ')';
+              }
             }
             
-            return percentText + ' (' + timeText + ')';
+            return percentText;
           }
 
           function getLimitStatusClass(remainingPercent) {
