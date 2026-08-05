@@ -51,6 +51,27 @@ test('parseKimiMembershipStats returns 5-hour, weekly, and one shared monthly wi
   assert.equal(usage.windows[2].detail, 'Kimi 11.12% · Code 5%');
 });
 
+test('parseKimiMembershipStats treats a ratio above 1 as an exhausted window', () => {
+  // These fields are ratios, so anything past 1 is over-consumption. Reading an
+  // out-of-range value as an already-scaled percentage flipped a spent quota
+  // into a nearly full one (the MiMo shape of #292).
+  const usage = parseKimiMembershipStats({
+    ratelimitCode5h: { ratio: 1.02, enabled: true },
+    subscriptionBalance: {
+      feature: 'FEATURE_OMNI',
+      type: 'SUBSCRIPTION',
+      amountUsedRatio: 1.5,
+      kimiCodeUsedRatio: 1.2
+    }
+  });
+
+  assert.deepEqual(usage.windows.map((window) => window.usedPercent), [100, 100]);
+  assert.deepEqual(usage.windows.map((window) => window.remainingPercent), [0, 0]);
+  // Only the meter saturates. The breakdown keeps both real shares, so the
+  // Kimi side isn't erased and Code isn't credited with a spend it never made.
+  assert.equal(usage.windows[1].detail, 'Kimi 30% · Code 120%');
+});
+
 test('parseKimiUsage accepts snake_case / *Value detail and window field aliases', () => {
   // Real-world APIs in this codebase frequently mix camelCase and snake_case
   // (Qoder's usedValue/limitValue, z.ai's currentValue, etc). Kimi's
@@ -464,4 +485,22 @@ test('fetchKimiLimits maps 401/403 to unauthorized and 429 to sourceRateLimited'
     { env: {}, now: () => Date.parse('2026-07-08T00:00:00Z'), fetch: async () => ({ ok: false, status: 500 }) }
   );
   assert.equal(unavailable.status, 'unavailable');
+});
+
+test('fetchKimiLimits physically aborts a hung request within its configured bound', async () => {
+  let signal;
+  const provider = await fetchKimiLimits(
+    { kimiApiKey: 'hung-key' },
+    {
+      env: {},
+      kimiFetchTimeoutMs: 5,
+      fetch: async (_url, init) => {
+        signal = init.signal;
+        return new Promise(() => {});
+      }
+    }
+  );
+
+  assert.equal(provider.status, 'unavailable');
+  assert.equal(signal.aborted, true);
 });

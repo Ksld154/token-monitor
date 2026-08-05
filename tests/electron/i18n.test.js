@@ -53,8 +53,38 @@ test('resolveLocale maps auto to Chinese variants from browser languages', () =>
 
 test('translate falls back to English and interpolates values', () => {
   assert.equal(translate('zh-TW', 'settings.sync.title'), '多裝置同步');
+  assert.equal(translate('zh-TW', 'settings.codex.personalWorkspace'), '個人');
+  assert.equal(translate('zh-CN', 'settings.codex.personalWorkspace'), '个人');
   assert.equal(translate('zh-CN', 'settings.appUpdate.latestWithStatus', { version: '0.2.1', status: '已是最新' }), 'v0.2.1（已是最新）');
   assert.equal(translate('zh-TW', 'missing.key'), 'missing.key');
+});
+
+test('automatic app update copy describes background downloads, not update checks', () => {
+  assert.equal(translate('en', 'settings.appUpdate.automatic'), 'Download updates automatically');
+  assert.equal(
+    translate('en', 'settings.appUpdate.automaticDescription'),
+    "Download new versions in the background. You'll be prompted to restart when ready."
+  );
+  assert.equal(translate('zh-TW', 'settings.appUpdate.automatic'), '自動下載更新');
+  assert.equal(
+    translate('zh-TW', 'settings.appUpdate.automaticUnsupportedWindowsPortable'),
+    'Portable 版本不支援自動下載，請透過「查看 release」手動更新。'
+  );
+});
+
+test('tool health copy stays compact and describes snapshots, not liveness', () => {
+  assert.equal(
+    translate('zh-TW', 'settings.summary.toolsHealth', {
+      healthy: 7, review: 5, unavailable: 9
+    }),
+    '正常 7 · 待查 5 · 未安裝 9'
+  );
+  assert.equal(translate('zh-TW', 'settings.tools.health.source'), '來源');
+  assert.equal(translate('zh-TW', 'settings.tools.health.sync'), '採集');
+  assert.equal(translate('zh-TW', 'settings.tools.health.usage'), '用量');
+  assert.equal(translate('en', 'settings.tools.health.sync.pending'), 'Sync pending');
+  assert.equal(translate('en', 'settings.tools.health.sync.ok'), 'Last sync succeeded');
+  assert.equal(translate('zh-TW', 'settings.tools.health.rescanFailed'), '無法重新掃描，請稍後再試。');
 });
 
 test('every bundled locale defines every English key', () => {
@@ -110,7 +140,7 @@ test('AI limit capability labels stay compact in Chinese', () => {
   assert.equal(translate('zh-TW', 'settings.limits.device.localAlso'), '本機也有');
   assert.equal(translate('zh-TW', 'settings.limits.capability.web'), 'Web');
   assert.equal(translate('zh-TW', 'settings.limits.capability.webApi'), 'Web/API');
-  assert.equal(translate('zh-TW', 'settings.limits.capability.membershipCodingPlan'), '會員/Coding Plan');
+  assert.equal(translate('zh-TW', 'settings.limits.capability.codingPlan'), 'Coding Plan');
   assert.equal(translate('zh-TW', 'settings.kimi.step3'), '找到 kimi-auth，複製它的 Value。');
   assert.equal(translate('zh-TW', 'settings.kimi.apiFallback'), '選用：Kimi Code API 備援');
   assert.equal(translate('zh-CN', 'settings.limits.capability.appMustBeOpen'), '需打开 App 或 CLI');
@@ -118,6 +148,23 @@ test('AI limit capability labels stay compact in Chinese', () => {
   assert.equal(translate('zh-CN', 'settings.limits.capability.manualLogin'), '手动登录');
   assert.equal(translate('zh-CN', 'settings.limits.device.from', { device: 'work-mac' }), '来自 work-mac');
   assert.equal(translate('zh-CN', 'settings.limits.status.noSyncedData'), '暂无同步数据');
+});
+
+test('Claude prepaid balance copy points to its merged provider panel', () => {
+  assert.equal(
+    translate('en', 'settings.limits.prepaidBalanceDesc'),
+    'Shows your claude.ai credit balance and expiry dates. Sign in to Claude Web here; the balance appears when the account has credits.'
+  );
+  assert.equal(
+    translate('zh-TW', 'settings.limits.prepaidBalanceDesc'),
+    '顯示 claude.ai 的信用餘額與到期日。請在此登入 Claude Web；帳號有餘額時才會顯示。'
+  );
+  assert.equal(
+    translate('zh-CN', 'settings.limits.prepaidBalanceDesc'),
+    '显示 claude.ai 的信用余额与到期日。请在此登录 Claude Web；账号有余额时才会显示。'
+  );
+  assert.doesNotMatch(translate('ko', 'settings.limits.prepaidBalanceDesc'), /Claude 계정/);
+  assert.doesNotMatch(translate('ja', 'settings.limits.prepaidBalanceDesc'), /Claudeアカウント/);
 });
 
 test('applyTranslations updates text, title, aria-label, placeholders, and document lang', () => {
@@ -180,4 +227,7 @@ test('view switcher actions are localized', () => {
   assert.equal(translate('zh-TW', 'views.switcher.choose'), '選擇視圖');
   assert.equal(translate('zh-CN', 'views.switcher.next', { view: '模型' }), '下一个：模型');
   assert.equal(translate('zh-CN', 'views.switcher.choose'), '选择视图');
+  assert.equal(translate('en', 'views.backHome'), 'Back to Home');
+  assert.equal(translate('zh-TW', 'views.backHome'), '返回主頁');
+  assert.equal(translate('zh-CN', 'views.backHome'), '返回主页');
 });

@@ -2,6 +2,9 @@
 
 const { normalizeLimitProvider } = require('./limits');
 const { hashKey } = require('./hashKey');
+const { runWithProbeDeadline } = require('./probeDeadline');
+
+const KIMI_FETCH_TIMEOUT_MS = 12_000;
 
 const KIMI_CODE_BASE_URL = 'https://api.kimi.com/coding/v1';
 const KIMI_CODE_USAGES_URL = `${KIMI_CODE_BASE_URL}/usages`;
@@ -282,11 +285,24 @@ function objectAt(body, keys) {
   return null;
 }
 
-function ratioPercent(value) {
+// Every caller passes one of Kimi's `*Ratio` fields, which are 0-1 fractions.
+// A value past 1 therefore means the quota is over-consumed, not that the API
+// switched to a 0-100 scale — guessing the latter turns a spent window into a
+// nearly full one (see the MiMo report in #292). Kept unclamped here so callers
+// that combine two ratios can do the arithmetic before saturating.
+function rawRatioPercent(value) {
   const ratio = numberOrNull(value);
   if (ratio === null || ratio < 0) return null;
-  const percent = ratio <= 1 ? ratio * 100 : ratio;
-  return Math.max(0, Math.min(100, percent));
+  return ratio * 100;
+}
+
+function clampPercent(value) {
+  return Math.max(0, Math.min(100, value));
+}
+
+function ratioPercent(value) {
+  const percent = rawRatioPercent(value);
+  return percent === null ? null : clampPercent(percent);
 }
 
 function ratioLabel(value) {
@@ -337,13 +353,19 @@ function parseKimiMembershipStats(rawBody) {
     && (!feature || feature === 'FEATURE_OMNI')
     && (!type || type === 'SUBSCRIPTION');
   if (compatibleBalance) {
-    const usedPercent = ratioPercent(balance.amountUsedRatio ?? balance.amount_used_ratio);
-    if (usedPercent !== null) {
-      const codeUsedPercent = ratioPercent(balance.kimiCodeUsedRatio ?? balance.kimi_code_used_ratio);
-      const safeCodePercent = codeUsedPercent === null ? null : Math.min(usedPercent, codeUsedPercent);
+    const rawUsedPercent = rawRatioPercent(balance.amountUsedRatio ?? balance.amount_used_ratio);
+    if (rawUsedPercent !== null) {
+      const usedPercent = clampPercent(rawUsedPercent);
+      // The meter saturates at 100%, but this breakdown is plain text and every
+      // number in it means "share of the monthly pool". Clamping the parts too
+      // would report a spend the account never made (and collapse the Kimi side
+      // to zero against a capped Code), so an over-consumed pool reads honestly
+      // as `Code 120%` instead.
+      const rawCodePercent = rawRatioPercent(balance.kimiCodeUsedRatio ?? balance.kimi_code_used_ratio);
+      const safeCodePercent = rawCodePercent === null ? null : Math.min(rawUsedPercent, rawCodePercent);
       const detail = safeCodePercent === null
         ? ''
-        : `Kimi ${ratioLabel(Math.max(0, usedPercent - safeCodePercent))}% · Code ${ratioLabel(safeCodePercent)}%`;
+        : `Kimi ${ratioLabel(Math.max(0, rawUsedPercent - safeCodePercent))}% · Code ${ratioLabel(safeCodePercent)}%`;
       windows.push({
         kind: 'billing',
         label: 'Monthly',
@@ -375,9 +397,14 @@ function kimiRequestError(label, response) {
 }
 
 async function fetchJson(url, init, deps, label) {
-  const response = await (deps.fetch || fetch)(url, init);
-  if (!response.ok) throw kimiRequestError(label, response);
-  return response.json();
+  const inputSignals = [deps.signal, init?.signal].filter(Boolean);
+  const parentSignal = inputSignals.length > 1 ? AbortSignal.any(inputSignals) : inputSignals[0];
+  const deadlineMs = Number(deps.kimiFetchTimeoutMs || deps.fetchTimeoutMs || KIMI_FETCH_TIMEOUT_MS);
+  return runWithProbeDeadline(async ({ signal }) => {
+    const response = await (deps.fetch || fetch)(url, { ...init, signal });
+    if (!response.ok) throw kimiRequestError(label, response);
+    return response.json();
+  }, { signal: parentSignal, deadlineMs });
 }
 
 function jwtSessionHeaders(token) {
@@ -547,6 +574,7 @@ async function fetchKimiLimits(options = {}, deps = {}) {
 }
 
 module.exports = {
+  KIMI_FETCH_TIMEOUT_MS,
   KIMI_CODE_BASE_URL,
   KIMI_CODE_USAGES_URL,
   KIMI_WEB_BASE_URL,

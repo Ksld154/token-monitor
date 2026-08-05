@@ -3,8 +3,16 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 
-const { aggregateLimits, mergeCodexTransientWindows, publicLimits, syncLimits } = require('../../src/shared/limits');
+const {
+  aggregateLimits,
+  mergeCodexTransientWindows,
+  normalizeLimitProvider,
+  normalizeLimitWindow,
+  publicLimits,
+  syncLimits
+} = require('../../src/shared/limits');
 const { collectLimitsOnce } = require('../../src/shared/limitCollector');
+const { codexAccountKey } = require('../../src/shared/codexAuth');
 
 function codexProvider(accountKey, accountEmail, remainingPercent, updatedAt) {
   return {
@@ -50,6 +58,66 @@ function mimoProvider(accountKey, accountName, usedPercent, updatedAt) {
   };
 }
 
+function claudeProvider(accountKey, accountEmail, remainingPercent, updatedAt) {
+  return {
+    provider: 'claude',
+    accountKey,
+    accountName: accountEmail.split('@')[0],
+    accountEmail,
+    accountLabel: 'Max 5x',
+    status: 'ok',
+    source: 'oauth',
+    updatedAt,
+    windows: [{
+      kind: 'session',
+      usedPercent: 100 - remainingPercent,
+      remainingPercent,
+      resetsAt: '2026-07-25T15:00:00.000Z',
+      windowMinutes: 300
+    }]
+  };
+}
+
+test('aggregateLimits keeps distinct Claude accounts and dedupes each one across devices', () => {
+  const aggregate = aggregateLimits([
+    {
+      deviceId: 'macbook',
+      limits: {
+        updatedAt: '2026-07-25T10:01:00.000Z',
+        providers: [
+          claudeProvider('sha256:claude-a', 'a@example.com', 18, '2026-07-25T10:00:00.000Z'),
+          claudeProvider('sha256:claude-b', 'b@example.com', 72, '2026-07-25T10:01:00.000Z')
+        ]
+      }
+    },
+    {
+      deviceId: 'desktop',
+      limits: {
+        updatedAt: '2026-07-25T10:05:00.000Z',
+        providers: [
+          claudeProvider('sha256:claude-a', 'a@example.com', 48, '2026-07-25T10:04:00.000Z'),
+          claudeProvider('sha256:claude-b', 'b@example.com', 82, '2026-07-25T10:05:00.000Z')
+        ]
+      }
+    }
+  ], 0, Date.parse('2026-07-25T10:06:00.000Z'));
+
+  const providers = aggregate.providers.filter((provider) => provider.provider === 'claude');
+  assert.equal(providers.length, 2);
+  assert.deepEqual(
+    new Set(providers.map((provider) => provider.accountKey)),
+    new Set(['sha256:claude-a', 'sha256:claude-b'])
+  );
+  assert.equal(
+    providers.find((provider) => provider.accountKey === 'sha256:claude-a').windows[0].remainingPercent,
+    48
+  );
+  assert.equal(
+    providers.find((provider) => provider.accountKey === 'sha256:claude-b').windows[0].remainingPercent,
+    82
+  );
+});
+
 test('aggregateLimits preserves distinct Codex accounts by hashed account key', () => {
   const aggregate = aggregateLimits([
     {
@@ -76,6 +144,70 @@ test('aggregateLimits preserves distinct Codex accounts by hashed account key', 
   );
 });
 
+test('aggregateLimits preserves same-email Codex workspaces by hashed account key', () => {
+  const aggregate = aggregateLimits([{
+    deviceId: 'macbook',
+    limits: {
+      updatedAt: '2026-06-14T10:01:00.000Z',
+      providers: [
+        codexProvider('sha256:personal', 'member@example.com', 18, '2026-06-14T10:00:00.000Z'),
+        codexProvider('sha256:team', 'member@example.com', 72, '2026-06-14T10:01:00.000Z')
+      ]
+    }
+  }], 0, Date.parse('2026-06-14T10:02:00.000Z'));
+
+  const codexProviders = aggregate.providers.filter((provider) => provider.provider === 'codex');
+  assert.equal(codexProviders.length, 2);
+  assert.deepEqual(
+    new Set(codexProviders.map((provider) => provider.accountKey)),
+    new Set(['sha256:personal', 'sha256:team'])
+  );
+});
+
+test('aggregateLimits dedupes same-email Personal and Team workspaces independently across devices', () => {
+  const email = 'member@example.com';
+  const personalKey = codexAccountKey(email, 'workspace-personal');
+  const teamKey = codexAccountKey(email, 'workspace-team');
+  const aggregate = aggregateLimits([
+    {
+      deviceId: 'macbook',
+      limits: {
+        updatedAt: '2026-07-24T10:01:00.000Z',
+        providers: [
+          codexProvider(personalKey, email, 18, '2026-07-24T10:00:00.000Z'),
+          codexProvider(teamKey, email, 72, '2026-07-24T10:01:00.000Z')
+        ]
+      }
+    },
+    {
+      deviceId: 'desktop',
+      limits: {
+        updatedAt: '2026-07-24T10:05:00.000Z',
+        providers: [
+          codexProvider(personalKey, email, 48, '2026-07-24T10:04:00.000Z'),
+          codexProvider(teamKey, email, 82, '2026-07-24T10:05:00.000Z')
+        ]
+      }
+    }
+  ], 0, Date.parse('2026-07-24T10:06:00.000Z'));
+
+  const codexProviders = aggregate.providers.filter((provider) => provider.provider === 'codex');
+  assert.equal(codexProviders.length, 2);
+  assert.deepEqual(
+    new Set(codexProviders.map((provider) => provider.accountKey)),
+    new Set([personalKey, teamKey])
+  );
+  assert.equal(
+    codexProviders.find((provider) => provider.accountKey === personalKey).windows[0].remainingPercent,
+    48
+  );
+  assert.equal(
+    codexProviders.find((provider) => provider.accountKey === teamKey).windows[0].remainingPercent,
+    82
+  );
+  assert.ok(codexProviders.every((provider) => provider.sourceDeviceId === 'desktop'));
+});
+
 test('aggregateLimits preserves distinct MiMo accounts by hashed account key', () => {
   const aggregate = aggregateLimits([
     {
@@ -96,6 +228,153 @@ test('aggregateLimits preserves distinct MiMo accounts by hashed account key', (
     new Set(mimoProviders.map((provider) => provider.accountKey)),
     new Set(['sha256:mimo-a', 'sha256:mimo-b'])
   );
+});
+
+test('aggregateLimits preserves distinct OpenRouter accounts and public stats scrub profile identity', () => {
+  const providers = ['work', 'personal'].map((accountName, index) => ({
+    provider: 'openrouter',
+    accountKey: `sha256:openrouter-${index}`,
+    accountName,
+    accountLabel: accountName,
+    status: 'ok',
+    source: 'api',
+    updatedAt: `2026-07-23T10:0${index}:00.000Z`,
+    windows: [{
+      kind: 'billing',
+      metric: 'credits',
+      label: 'Account credit',
+      used: index + 1,
+      limit: 10,
+      remaining: 9 - index
+    }],
+    balance: {
+      amount: 9 - index,
+      currency: 'USD',
+      todaySpend: index + 0.25,
+      weekSpend: index + 1.25,
+      monthSpend: index + 2.25,
+      allTimeSpend: index + 3.25
+    }
+  }));
+  const aggregate = aggregateLimits([{
+    deviceId: 'macbook',
+    limits: { updatedAt: '2026-07-23T10:02:00.000Z', providers }
+  }], 0, Date.parse('2026-07-23T10:03:00.000Z'));
+  const openrouter = aggregate.providers.filter((provider) => provider.provider === 'openrouter');
+  assert.equal(openrouter.length, 2);
+  assert.deepEqual(new Set(openrouter.map((provider) => provider.accountName)), new Set(['work', 'personal']));
+  const work = openrouter.find((provider) => provider.accountName === 'work');
+  assert.equal(work.balance.amount, 9);
+  assert.equal(work.balance.currency, 'USD');
+  assert.equal(work.balance.todaySpend, 0.25);
+  assert.equal(work.balance.weekSpend, 1.25);
+  assert.equal(work.balance.monthSpend, 2.25);
+  assert.equal(work.balance.allTimeSpend, 3.25);
+  assert.equal(work.windows[0].metric, 'credits');
+  assert.equal(work.windows[0].label, 'Account credit');
+
+  const publicPayload = publicLimits({ providers: openrouter });
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider, 'accountKey')));
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider, 'accountName')));
+  assert.ok(publicPayload.providers.every((provider) => provider.windows[0].metric === 'credits'));
+});
+
+test('aggregateLimits preserves distinct Third-party API accounts while keeping Base URLs off the wire', () => {
+  const providers = ['工作', 'personal'].map((accountName, index) => normalizeLimitProvider({
+    provider: 'thirdparty',
+    accountKey: `sha256:thirdparty-${index}`,
+    accountName,
+    accountLabel: accountName,
+    planLabel: `token-${index}`,
+    status: 'ok',
+    source: 'api',
+    updatedAt: `2026-07-24T10:0${index}:00.000Z`,
+    windows: [{
+      kind: 'billing',
+      metric: 'credits',
+      label: 'Token quota',
+      used: index,
+      limit: 50,
+      remaining: 50 - index
+    }],
+    balance: {
+      amount: 50 - index,
+      currency: 'USD',
+      allTimeSpend: index,
+      requestCount: index + 10,
+      quotaGroup: index === 0 ? 'default' : 'vip',
+      expiresAt: '2027-01-15T08:00:00.000Z'
+    }
+  }));
+  const aggregate = aggregateLimits([{
+    deviceId: 'macbook',
+    limits: { updatedAt: '2026-07-24T10:02:00.000Z', providers }
+  }], 0, Date.parse('2026-07-24T10:03:00.000Z'));
+  const thirdparty = aggregate.providers.filter((provider) => provider.provider === 'thirdparty');
+  assert.equal(thirdparty.length, 2);
+  assert.deepEqual(new Set(thirdparty.map((provider) => provider.accountName)), new Set(['工作', 'personal']));
+  const work = thirdparty.find((provider) => provider.accountName === '工作');
+  assert.equal(work.balance.requestCount, 10);
+  assert.equal(work.balance.quotaGroup, 'default');
+  assert.equal(work.balance.expiresAt, '2027-01-15T08:00:00.000Z');
+  assert.equal(JSON.stringify(thirdparty).includes('http'), false);
+
+  const publicPayload = publicLimits({ providers: thirdparty });
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider, 'accountKey')));
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider, 'accountName')));
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider, 'accountLabel')));
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider, 'planLabel')));
+  assert.ok(publicPayload.providers.every((provider) => !Object.hasOwn(provider.balance, 'quotaGroup')));
+  assert.ok(publicPayload.providers.every((provider) => Object.hasOwn(provider.balance, 'requestCount')));
+});
+
+test('limit provider normalization rejects oversized account text before Unicode normalization', () => {
+  const provider = normalizeLimitProvider({
+    provider: 'thirdparty',
+    accountLabel: 'x'.repeat(257),
+    accountName: 'x'.repeat(513),
+    status: 'ok',
+    source: 'api',
+    windows: []
+  });
+  assert.equal(provider.accountLabel, '');
+  assert.equal(provider.accountName, '');
+});
+
+test('limit provider normalization strips upstream punctuation while preserving Unicode text', () => {
+  const provider = normalizeLimitProvider({
+    provider: 'thirdparty',
+    accountLabel: 'Coding Plan/Pro',
+    accountName: 'Team: Enterprise',
+    planLabel: 'Pro (Trial) 工作',
+    status: 'ok',
+    source: 'api',
+    windows: []
+  });
+  assert.equal(provider.accountLabel, 'Coding PlanPro');
+  assert.equal(provider.accountName, 'Team Enterprise');
+  assert.equal(provider.planLabel, 'Pro Trial 工作');
+});
+
+test('limit provider normalization rejects Unicode emails and embedded endpoint text', () => {
+  for (const value of [
+    'user＠example.com',
+    'Plan https://relay.example/path',
+    '前綴 ＨＴＴＰＳ：／／relay.example/path'
+  ]) {
+    const provider = normalizeLimitProvider({
+      provider: 'thirdparty',
+      accountLabel: value,
+      accountName: value,
+      planLabel: value,
+      status: 'ok',
+      source: 'api',
+      windows: []
+    });
+    assert.equal(provider.accountLabel, '');
+    assert.equal(provider.accountName, '');
+    assert.equal(provider.planLabel, '');
+  }
 });
 
 test('publicLimits preserves MiMo plan status while removing account identity', () => {
@@ -119,6 +398,7 @@ test('publicLimits preserves a bounded window detail for shared quota compositio
       source: 'web',
       windows: [{
         kind: 'billing',
+        metric: 'provider-private-value',
         usedPercent: 16.12,
         detail: 'Kimi 11.12% · Code 5%\n'
       }]
@@ -126,6 +406,7 @@ test('publicLimits preserves a bounded window detail for shared quota compositio
   });
 
   assert.equal(payload.providers[0].windows[0].detail, 'Kimi 11.12% · Code 5%');
+  assert.equal(Object.hasOwn(payload.providers[0].windows[0], 'metric'), false);
 });
 
 test('aggregateLimits merges the same Codex account across devices and keeps distinct ones', () => {
@@ -478,6 +759,7 @@ test('syncLimits carries Codex account identity and legacy plan label to the aut
     providers: [
       {
         ...codexProvider('sha256:codex-a', 'a@example.com', 18, '2026-06-14T10:00:00.000Z'),
+        workspaceKind: 'personal',
         resetCredits: {
           availableCount: 2,
           nextExpiresAt: '2026-07-18T23:00:00Z',
@@ -497,6 +779,7 @@ test('syncLimits carries Codex account identity and legacy plan label to the aut
   assert.equal(payload.providers[0].accountEmail, 'a@example.com');
   assert.equal(payload.providers[0].accountLabel, 'Plus');
   assert.equal(payload.providers[0].planLabel, '');
+  assert.equal(payload.providers[0].workspaceKind, 'personal');
   assert.deepEqual(payload.providers[0].resetCredits, {
     availableCount: 2,
     nextExpiresAt: '2026-07-18T23:00:00.000Z',
@@ -511,7 +794,10 @@ test('publicLimits strips Codex account identity fields', () => {
   const payload = publicLimits({
     updatedAt: '2026-06-14T10:00:00.000Z',
     providers: [
-      codexProvider('sha256:codex-a', 'a@example.com', 18, '2026-06-14T10:00:00.000Z')
+      {
+        ...codexProvider('sha256:codex-a', 'a@example.com', 18, '2026-06-14T10:00:00.000Z'),
+        workspaceKind: 'personal'
+      }
     ]
   });
 
@@ -522,6 +808,7 @@ test('publicLimits strips Codex account identity fields', () => {
   assert.equal(Object.hasOwn(payload.providers[0], 'accountEmail'), false);
   assert.equal(Object.hasOwn(payload.providers[0], 'accountLabel'), false);
   assert.equal(Object.hasOwn(payload.providers[0], 'planLabel'), false);
+  assert.equal(Object.hasOwn(payload.providers[0], 'workspaceKind'), false);
 });
 
 test('OpenCode sync keeps the legacy profile label and explicit plan while public stats scrub both', () => {
@@ -642,4 +929,196 @@ test('the local device raw limits still carry the unauthorized row the aggregate
   const localGrok = thisMac.limits.providers.find((provider) => provider.provider === 'grok');
   assert.equal(localGrok.status, 'unauthorized');
   assert.equal(localGrok.accountKey, 'sha256:local-bad-key');
+});
+
+test('normalizeLimitWindow normalizes the window currency', () => {
+  assert.equal(normalizeLimitWindow({ kind: 'billing', currency: ' cny ' }).currency, 'CNY');
+  assert.equal(normalizeLimitWindow({ kind: 'billing', currency: 'usd' }).currency, 'USD');
+  assert.equal(normalizeLimitWindow({ kind: 'billing', currency: 'verylongcurrencycode' }).currency, 'VERYLONG');
+  assert.equal(normalizeLimitWindow({ kind: 'billing', currency: '   ' }).currency, null);
+  assert.equal(normalizeLimitWindow({ kind: 'billing' }).currency, null);
+});
+
+test('normalizeLimitProvider restores a balance window for pre-credits-window devices', () => {
+  // An older device posts DeepSeek as a balance with no windows at all.
+  const legacy = normalizeLimitProvider({
+    provider: 'deepseek',
+    accountKey: 'ds1',
+    status: 'ok',
+    source: 'api',
+    updatedAt: '2026-07-26T00:00:00.000Z',
+    windows: [],
+    balance: { amount: 4, currency: 'CNY', monthSpend: 6 }
+  });
+
+  assert.equal(legacy.windows.length, 1);
+  assert.equal(legacy.windows[0].metric, 'credits');
+  assert.equal(legacy.windows[0].label, 'Balance');
+  assert.equal(legacy.windows[0].remaining, 4);
+  assert.equal(legacy.windows[0].currency, 'CNY');
+  // Only the amount is restored — no percentage is invented on the wire.
+  assert.equal(legacy.windows[0].usedPercent, null);
+  assert.equal(legacy.windows[0].remainingPercent, null);
+});
+
+test('normalizeLimitProvider never duplicates an existing credits window', () => {
+  const current = normalizeLimitProvider({
+    provider: 'thirdparty',
+    accountKey: 'tp1',
+    status: 'ok',
+    updatedAt: '2026-07-26T00:00:00.000Z',
+    windows: [{ kind: 'billing', metric: 'credits', label: 'Token quota', remaining: 12.5 }],
+    balance: { amount: 12.5, currency: 'USD' }
+  });
+
+  assert.equal(current.windows.length, 1);
+  assert.equal(current.windows[0].label, 'Token quota');
+});
+
+test('normalizeLimitProvider leaves percentage-only providers alone', () => {
+  const claude = normalizeLimitProvider({
+    provider: 'claude',
+    accountKey: 'c1',
+    status: 'ok',
+    updatedAt: '2026-07-26T00:00:00.000Z',
+    windows: [{ kind: 'session', usedPercent: 8 }]
+  });
+
+  assert.equal(claude.windows.length, 1);
+  assert.equal(claude.windows[0].metric, undefined);
+});
+
+test('normalizeLimitProvider keeps a restored balance behind the MiMo token plan', () => {
+  const mimo = normalizeLimitProvider({
+    provider: 'mimo',
+    accountKey: 'm1',
+    status: 'ok',
+    updatedAt: '2026-07-26T00:00:00.000Z',
+    windows: [{ kind: 'billing', label: 'Token Plan', used: 22, limit: 100 }],
+    balance: { amount: 12.5, currency: 'CNY' }
+  });
+
+  assert.deepEqual(mimo.windows.map((window) => window.label), ['Token Plan', 'Balance']);
+});
+
+test('balance tranches normalize, sort by expiry, and drop amountless entries', () => {
+  const provider = normalizeLimitProvider({
+    provider: 'claude',
+    status: 'ok',
+    windows: [{ kind: 'billing', metric: 'credits', label: 'Balance', remaining: 113.44, currency: 'USD', showMeter: false }],
+    balance: {
+      amount: 113.44,
+      currency: 'USD',
+      tranches: [
+        { amount: 100, currency: 'usd', expiresAt: '2026-09-19T00:00:00Z' },
+        { amount: 13.43, currency: 'usd', expires_at: '2026-08-09T00:00:00Z' },
+        { amount: 5, currency: 'usd' },
+        { currency: 'usd', expiresAt: '2026-08-01T00:00:00Z' }
+      ]
+    }
+  });
+  assert.deepEqual(provider.balance.tranches, [
+    { amount: 13.43, currency: 'USD', expiresAt: '2026-08-09T00:00:00.000Z' },
+    { amount: 100, currency: 'USD', expiresAt: '2026-09-19T00:00:00.000Z' },
+    { amount: 5, currency: 'USD', expiresAt: null }
+  ]);
+});
+
+test('balance without tranches omits the field entirely', () => {
+  const provider = normalizeLimitProvider({
+    provider: 'deepseek',
+    status: 'ok',
+    windows: [],
+    balance: { amount: 10, currency: 'CNY' }
+  });
+  assert.equal('tranches' in provider.balance, false);
+});
+
+test('public limits drop per-grant balance tranches but keep the amount', () => {
+  const summary = publicLimits({
+    providers: [{
+      provider: 'claude',
+      accountKey: 'sha256:private',
+      status: 'ok',
+      source: 'web',
+      windows: [{ kind: 'billing', metric: 'credits', label: 'Balance', remaining: 113.44, currency: 'USD', showMeter: false }],
+      balance: {
+        amount: 113.44,
+        currency: 'USD',
+        quotaGroup: 'default',
+        tranches: [{ amount: 13.43, currency: 'USD', expiresAt: '2026-08-09T00:00:00Z' }]
+      }
+    }]
+  });
+  const balance = summary.providers[0].balance;
+  assert.equal(balance.amount, 113.44);
+  assert.equal(balance.currency, 'USD');
+  assert.equal(Object.hasOwn(balance, 'tranches'), false, 'per-grant expiry detail must stay private');
+  assert.equal(Object.hasOwn(balance, 'quotaGroup'), false);
+});
+
+function claudeDeviceRecord({ deviceId, source, agoMs, balance, nowMs }) {
+  const at = new Date(nowMs - agoMs).toISOString();
+  return {
+    deviceId,
+    receivedAt: at,
+    limits: {
+      updatedAt: at,
+      providers: [{
+        provider: 'claude',
+        accountKey: 'sha256:same-account',
+        accountEmail: 'me@example.com',
+        status: 'ok',
+        source,
+        updatedAt: at,
+        windows: [
+          { kind: 'session', usedPercent: 8 },
+          { kind: 'weekly', usedPercent: 49 },
+          { kind: 'billing', label: 'Usage credits', used: 2.35, limit: 20, currency: 'USD' },
+          ...(balance
+            ? [{ kind: 'billing', metric: 'credits', label: 'Balance', remaining: 113.44, currency: 'USD', showMeter: false }]
+            : [])
+        ],
+        ...(balance ? { balance: { amount: 113.44, currency: 'USD' } } : {})
+      }]
+    }
+  };
+}
+
+// Only a device with a claude.ai Web session can read the prepaid pool. The same
+// account collected over OAuth on another machine reports no balance, and that
+// record is usually the freshest — so without carry-forward the row blinks in
+// and out as devices take turns posting.
+test('a fresher device without a Claude balance does not erase another device\'s', () => {
+  const nowMs = Date.parse('2026-07-27T12:00:00Z');
+  const aggregate = aggregateLimits([
+    claudeDeviceRecord({ deviceId: 'macbook', source: 'web', agoMs: 5000, balance: true, nowMs }),
+    claudeDeviceRecord({ deviceId: 'winbox', source: 'oauth', agoMs: 0, balance: false, nowMs })
+  ], 600_000, nowMs);
+
+  const claude = aggregate.providers.filter((provider) => provider.provider === 'claude');
+  assert.equal(claude.length, 1);
+  assert.equal(claude[0].source, 'oauth', 'the freshest record still wins for usage');
+  assert.equal(claude[0].balance.amount, 113.44, 'but its missing balance is carried over');
+  assert.equal(claude[0].windows.some((window) => window.metric === 'credits'), true);
+});
+
+test('a stale balance observer does not pin an outdated Claude balance', () => {
+  const nowMs = Date.parse('2026-07-27T12:00:00Z');
+  const aggregate = aggregateLimits([
+    claudeDeviceRecord({ deviceId: 'macbook', source: 'web', agoMs: 900_000, balance: true, nowMs }),
+    claudeDeviceRecord({ deviceId: 'winbox', source: 'oauth', agoMs: 0, balance: false, nowMs })
+  ], 600_000, nowMs);
+
+  const claude = aggregate.providers.filter((provider) => provider.provider === 'claude');
+  assert.equal(claude.length, 1);
+  assert.equal(claude[0].balance, null);
+  assert.equal(claude[0].windows.some((window) => window.metric === 'credits'), false);
+});
+
+test('window metric accepts only the documented machine-readable roles', () => {
+  assert.equal(normalizeLimitWindow({ kind: 'billing', metric: 'credits' }).metric, 'credits');
+  assert.equal(normalizeLimitWindow({ kind: 'billing', metric: 'spend' }).metric, 'spend');
+  // Anything else is dropped rather than carried onto the wire as a free-form tag.
+  assert.equal('metric' in normalizeLimitWindow({ kind: 'billing', metric: 'whatever' }), false);
 });
