@@ -53,7 +53,7 @@ html, body {
   background: transparent;
   border-radius: 14px;
   color: var(--text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  font-family: var(--ui-font, ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace);
   user-select: none;
   -webkit-user-select: none;
 }
@@ -198,6 +198,7 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
   gap: 12px;
   min-height: 30px;
 }
+.titlebar.period-menu-open { z-index: 13; }
 .shell.desktop-mode .titlebar { -webkit-app-region: no-drag; }
 .titlebar > div:first-child { min-width: 0; flex: 1 1 auto; }
 .app-title {
@@ -660,6 +661,8 @@ body.is-windows.floating-bubble-collapsed-right .floating-bubble-tab {
 }
 .settings-panel .settings-item.hidden { display: none; }
 #windowsBackdropNote.hidden { display: none; }
+#limitsRefreshAdaptiveNote.hidden { display: none; }
+#volcengineAgentConfigured.hidden { display: none; }
 .settings-item-text {
   flex: 1 1 auto;
   min-width: 0;
@@ -1406,6 +1409,80 @@ span.settings-note.settings-item-desc {
   gap: 6px 14px;
 }
 .about-settings-links .inline-link { font-size: 10px; }
+.about-settings-diagnostics {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin-top: 11px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(var(--line-rgb), 0.10);
+  transition: grid-template-rows 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    margin-top 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    padding-top 250ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-top-color 250ms ease;
+}
+.about-settings-diagnostics.hidden {
+  padding-top: 0;
+  border-top-color: transparent;
+}
+.diagnostic-preview.hidden { display: none; }
+.about-settings-diagnostics-inner {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+}
+.about-settings-diagnostics-heading {
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 600;
+}
+.about-settings-diagnostics .settings-note { margin: 0; }
+.diagnostic-actions,
+.diagnostic-preview-header,
+.diagnostic-preview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+}
+.diagnostic-actions button { font-size: 10px; }
+.diagnostic-actions button:disabled,
+.diagnostic-preview-actions button:disabled { opacity: 0.45; cursor: default; }
+.diagnostic-privacy-note { color: var(--muted); font-size: 9px; line-height: 1.35; }
+.diagnostic-status {
+  min-height: 13px;
+  color: var(--muted);
+  font-size: 9px;
+}
+.diagnostic-status.success { color: var(--green, var(--text)); }
+.diagnostic-status.error { color: var(--red, #f08080); }
+.diagnostic-preview {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.diagnostic-preview-header {
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+#diagnosticReportText {
+  max-height: 260px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid rgba(var(--line-rgb), 0.12);
+  border-radius: 7px;
+  background: rgba(var(--overlay-rgb), 0.18);
+  color: var(--muted);
+  font-family: var(--mono-font, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 8px;
+  line-height: 1.45;
+  white-space: pre;
+  tab-size: 2;
+}
 .hub-mode-options {
   display: grid;
   min-width: 0;
@@ -1499,8 +1576,10 @@ span.settings-note.settings-item-desc {
   font-size: 10px;
 }
 .hub-status.ok { color: var(--success); border-color: rgba(var(--success-rgb), 0.32); }
+.hub-status.warning { color: var(--orange); border-color: rgba(244, 160, 115, 0.4); }
 .hub-status.error { color: var(--red); border-color: rgba(244, 119, 136, 0.42); }
 .hub-status[hidden] { display: none; }
+.hub-build-status { line-height: 1.4; }
 .hub-address-list { display: grid; min-width: 0; gap: 5px; }
 .hub-address-header { color: var(--muted); font-size: 10px; }
 .hub-address-empty { color: var(--muted); font-size: 10px; line-height: 1.4; }
@@ -1534,6 +1613,12 @@ span.settings-note.settings-item-desc {
 .currency-rate-row.hidden, .currency-rate-manual-field.hidden { display: none; }
 /* The rate row is a sub-setting of the Currency row: keep them as one unseparated pair. */
 .settings-subgroup > .settings-item + .currency-rate-row { margin-top: 0; }
+/* The pair ends there: the next setting rejoins the grouped list with its hairline,
+   instead of floating off on the generic 8px subgroup margin. */
+.settings-subgroup > .currency-rate-row + .settings-item {
+  margin-top: 0;
+  border-top: 1px solid rgba(var(--line-rgb), 0.06);
+}
 .currency-rate-manual-field { display: flex; align-items: center; gap: 8px; min-width: 0; padding-bottom: 2px; }
 .currency-rate-prefix { flex: 0 0 auto; color: var(--muted); font-size: 11px; }
 .settings-panel .currency-rate-manual-field input { flex: 1 1 0; width: 0; min-width: 0; font-size: 11px; }
@@ -1907,6 +1992,14 @@ span.settings-note.settings-item-desc {
 }
 .tool-health-action:hover:not(:disabled) {
   border-color: rgba(var(--accent-rgb), 0.42);
+  color: var(--fg);
+}
+.tool-health-action.is-repair {
+  border-color: rgba(244, 160, 115, 0.48);
+  color: var(--orange);
+}
+.tool-health-action.is-repair:hover:not(:disabled) {
+  border-color: rgba(244, 160, 115, 0.72);
   color: var(--fg);
 }
 .tool-health-action:disabled { cursor: default; opacity: 0.55; }
@@ -2326,6 +2419,61 @@ span.settings-note.settings-item-desc {
 }
 
 /* Appearance: interface theme presets + colour pickers */
+.settings-font-controls {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 0;
+  padding-top: 9px;
+  padding-bottom: 9px;
+  border-top: 1px solid var(--line);
+}
+.settings-font-field {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.settings-font-input-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18px;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.settings-panel .settings-font-input-row select,
+.settings-panel .settings-font-input-row input {
+  width: 100%;
+  min-width: 0;
+}
+.settings-font-input-row .reset-appearance-button {
+  width: 18px;
+  height: 18px;
+}
+.settings-font-custom-row {
+  display: grid;
+  gap: 4px;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.settings-font-custom-row.hidden { display: none; }
+.settings-font-preview {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: rgba(var(--overlay-rgb), var(--control-alpha));
+}
+.settings-font-preview-label { color: var(--muted); font-size: 9px; }
+.settings-font-preview-sample { color: var(--text); font-size: 14px; line-height: 1.2; }
+.settings-font-controls > .settings-note {
+  margin: 0;
+  line-height: 1.45;
+}
 .theme-preset-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .theme-preset-chip {
   display: inline-flex;
@@ -2382,7 +2530,9 @@ span.settings-note.settings-item-desc {
   overflow-y: auto;
   padding-right: 4px;
 }
-.settings-panel input, .settings-panel select {
+.settings-panel input,
+.settings-panel select,
+.settings-panel textarea {
   width: 100%;
   min-width: 0;
   padding: 7px 8px;
@@ -2391,6 +2541,11 @@ span.settings-note.settings-item-desc {
   background: rgba(var(--sunken-rgb), 0.48);
   color: var(--text);
   outline: none;
+}
+.settings-panel textarea {
+  height: 54px;
+  min-height: 54px;
+  resize: vertical;
 }
 .settings-panel select {
   appearance: none;
@@ -2433,7 +2588,8 @@ html.is-windows .settings-panel select option {
   background: rgb(var(--accent-rgb));
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
 }
-.settings-panel input:focus { border-color: rgba(115, 189, 245, 0.72); }
+.settings-panel input:focus,
+.settings-panel textarea:focus { border-color: rgba(115, 189, 245, 0.72); }
 .settings-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .settings-actions button { min-height: 30px; padding: 0 10px; border-radius: 8px; font-size: 11px; white-space: nowrap; }
 .refresh-button {
@@ -2552,6 +2708,21 @@ html.is-windows .settings-panel select option {
   background: transparent;
   box-shadow: none;
 }
+.fixed-period-message {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  flex: 1;
+  min-height: 0;
+  place-items: center;
+  padding: 0 24px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.55;
+  text-align: center;
+  text-wrap: balance;
+}
+.fixed-period-message.hidden { display: none; }
 .total-panel {
   position: relative;
   z-index: 1;
@@ -2574,7 +2745,7 @@ html.is-windows .settings-panel select option {
   min-width: 0;
   margin-top: 8px;
   color: var(--number);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif;
+  font-family: var(--display-font, -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", sans-serif);
   font-weight: 500;
   font-size: clamp(30px, 11vw, 46px);
   line-height: 1.05;
@@ -3047,22 +3218,17 @@ html.is-windows .settings-panel select option {
   display: block;
   overflow: visible;
 }
-.home-activity-canvas .heat-base-layer .heat {
-  transform-box: fill-box;
-  transform-origin: center;
-}
 .home-activity-canvas .heat {
   fill: rgba(var(--overlay-rgb), 0.03);
   stroke: none;
   stroke-width: 0;
-  transition: fill 140ms ease, stroke 140ms ease, transform 140ms ease;
+  transition: fill 140ms ease, stroke 140ms ease;
 }
 .home-activity-canvas .heat[data-active="true"],
 .home-activity-canvas .heat:hover {
   filter: url("#homeActivityHeatGlow");
   stroke: rgba(var(--line-rgb), 0.9);
   stroke-width: 1;
-  transform: scale(1.28);
 }
 .home-activity-canvas .heat-bright-layer {
   opacity: 0;
@@ -3121,9 +3287,11 @@ html.is-windows .settings-panel select option {
   padding: 6px 9px;
   border: 1px solid rgba(var(--line-rgb), 0.16);
   border-radius: 8px;
-  background: rgba(var(--panel-rgb), 0.94);
+  background: rgba(var(--panel-rgb), 0.58);
   color: var(--text);
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.26), 0 0 18px rgba(var(--blue-rgb), 0.22);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.18), inset 0 1px 0 rgba(var(--overlay-rgb), 0.08);
+  -webkit-backdrop-filter: blur(10px) saturate(120%);
+  backdrop-filter: blur(10px) saturate(120%);
   font-size: 10px;
   line-height: 1.1;
   opacity: 0;
@@ -3236,16 +3404,22 @@ html.is-windows .settings-panel select option {
 .row-icon-pi         { -webkit-mask-image: url(../../../assets/icons/pi.svg);            mask-image: url(../../../assets/icons/pi.svg); }
 .row-icon-zed        { -webkit-mask-image: url(../../../assets/icons/zed.svg);           mask-image: url(../../../assets/icons/zed.svg); }
 .row-icon-kilocode   { -webkit-mask-image: url(../../../assets/icons/kilocode.svg);      mask-image: url(../../../assets/icons/kilocode.svg); }
+.row-icon-commandcode { -webkit-mask-image: url(../../../assets/icons/commandcode.svg);   mask-image: url(../../../assets/icons/commandcode.svg); }
 .row-icon-micode     { -webkit-mask-image: url(../../../assets/icons/xiaomi.svg);       mask-image: url(../../../assets/icons/xiaomi.svg); }
 .row-icon-zcode      { -webkit-mask-image: url(../../../assets/icons/zai.svg);          mask-image: url(../../../assets/icons/zai.svg); }
 .row-icon-kiro       { -webkit-mask-image: url(../../../assets/icons/kiro.svg);          mask-image: url(../../../assets/icons/kiro.svg); }
 .row-icon-codebuddy  { -webkit-mask-image: url(../../../assets/icons/codebuddy.svg);     mask-image: url(../../../assets/icons/codebuddy.svg); }
 .row-icon-workbuddy  { -webkit-mask-image: url(../../../assets/icons/workbuddy.svg);     mask-image: url(../../../assets/icons/workbuddy.svg); }
 .row-icon-proma      { -webkit-mask-image: url(../../../assets/icons/proma.svg);         mask-image: url(../../../assets/icons/proma.svg); }
+.row-icon-reasonix   { -webkit-mask-image: url(../../../assets/icons/reasonix.svg);      mask-image: url(../../../assets/icons/reasonix.svg); }
+.row-icon-dsh        { -webkit-mask-image: url(../../../assets/icons/dsh.svg);            mask-image: url(../../../assets/icons/dsh.svg); }
+.row-icon-cherrystudio { -webkit-mask-image: url(../../../assets/icons/cherrystudio.svg); mask-image: url(../../../assets/icons/cherrystudio.svg); }
+.row-icon-lmstudio  { -webkit-mask-image: url(../../../assets/icons/lmstudio.svg);      mask-image: url(../../../assets/icons/lmstudio.svg); }
 .row-icon-opencode   { -webkit-mask-image: url(../../../assets/icons/opencode.svg);      mask-image: url(../../../assets/icons/opencode.svg); }
 .row-icon-openrouter { -webkit-mask-image: url(../../../assets/icons/openrouter.svg);    mask-image: url(../../../assets/icons/openrouter.svg); }
 .row-icon-openclaw   { -webkit-mask-image: url(../../../assets/icons/openclaw.svg);      mask-image: url(../../../assets/icons/openclaw.svg); }
 .row-icon-deepseek   { -webkit-mask-image: url(../../../assets/icons/deepseek.svg);      mask-image: url(../../../assets/icons/deepseek.svg); }
+.row-icon-hunyuan    { -webkit-mask-image: url(../../../assets/icons/hunyuan.svg);       mask-image: url(../../../assets/icons/hunyuan.svg); }
 .row-icon-xai        { -webkit-mask-image: url(../../../assets/icons/grok.svg);          mask-image: url(../../../assets/icons/grok.svg); }
 .row-icon-meta       { -webkit-mask-image: url(../../../assets/icons/meta.svg);          mask-image: url(../../../assets/icons/meta.svg); }
 .row-icon-mistral    { -webkit-mask-image: url(../../../assets/icons/mistral.svg);       mask-image: url(../../../assets/icons/mistral.svg); }
@@ -3260,8 +3434,13 @@ html.is-windows .settings-panel select option {
 .row-icon-doubao     { -webkit-mask-image: url(../../../assets/icons/doubao.svg);        mask-image: url(../../../assets/icons/doubao.svg); }
 .row-icon-volcengine     { -webkit-mask-image: url(../../../assets/icons/volcengine.svg);        mask-image: url(../../../assets/icons/volcengine.svg); }
 .row-icon-qoder      { -webkit-mask-image: url(../../../assets/icons/qoder.svg);         mask-image: url(../../../assets/icons/qoder.svg); }
+.row-icon-trae       { -webkit-mask-image: url(../../../assets/icons/trae.svg);          mask-image: url(../../../assets/icons/trae.svg); }
+.row-icon-qodercn    { -webkit-mask-image: url(../../../assets/icons/qodercn.svg);      mask-image: url(../../../assets/icons/qodercn.svg); }
 .row-icon-ollama     { -webkit-mask-image: url(../../../assets/icons/ollama.svg);        mask-image: url(../../../assets/icons/ollama.svg); }
-.row-icon-thirdparty { -webkit-mask-image: url(../../../assets/icons/newapi.svg);         mask-image: url(../../../assets/icons/newapi.svg); }
+.row-icon-thirdparty { -webkit-mask-image: url(../../../assets/icons/thirdparty.svg);      mask-image: url(../../../assets/icons/thirdparty.svg); }
+.row-icon-newapi    { -webkit-mask-image: url(../../../assets/icons/newapi.svg);           mask-image: url(../../../assets/icons/newapi.svg); }
+.row-icon-sub2api   { -webkit-mask-image: url(../../../assets/icons/sub2api.svg);          mask-image: url(../../../assets/icons/sub2api.svg); }
+.row-icon-token-monitor { -webkit-mask-image: url(../../../assets/icons/token-monitor.svg); mask-image: url(../../../assets/icons/token-monitor.svg); }
 .row-icon-os-apple   { -webkit-mask-image: url(../../../assets/icons/os-apple.svg);      mask-image: url(../../../assets/icons/os-apple.svg); }
 .row-icon-os-linux   { -webkit-mask-image: url(../../../assets/icons/os-linux.svg);      mask-image: url(../../../assets/icons/os-linux.svg); }
 .row-icon-os-windows { -webkit-mask-image: url(../../../assets/icons/os-windows.svg);    mask-image: url(../../../assets/icons/os-windows.svg); }
@@ -3318,9 +3497,17 @@ html.is-windows .settings-panel select option {
   -webkit-mask-image: url(../../../assets/icons/copilot.svg);
   mask-image: url(../../../assets/icons/copilot.svg);
 }
+.limit-icon-zed {
+  -webkit-mask-image: url(../../../assets/icons/zed.svg);
+  mask-image: url(../../../assets/icons/zed.svg);
+}
 .limit-icon-kiro {
   -webkit-mask-image: url(../../../assets/icons/kiro.svg);
   mask-image: url(../../../assets/icons/kiro.svg);
+}
+.limit-icon-commandcode {
+  -webkit-mask-image: url(../../../assets/icons/commandcode.svg);
+  mask-image: url(../../../assets/icons/commandcode.svg);
 }
 .limit-icon-zai {
   -webkit-mask-image: url(../../../assets/icons/zai.svg);
@@ -3338,6 +3525,14 @@ html.is-windows .settings-panel select option {
   -webkit-mask-image: url(../../../assets/icons/qoder.svg);
   mask-image: url(../../../assets/icons/qoder.svg);
 }
+.limit-icon-trae {
+  -webkit-mask-image: url(../../../assets/icons/trae.svg);
+  mask-image: url(../../../assets/icons/trae.svg);
+}
+.limit-icon-workbuddy {
+  -webkit-mask-image: url(../../../assets/icons/workbuddy.svg);
+  mask-image: url(../../../assets/icons/workbuddy.svg);
+}
 
 .limit-icon-ollama {
   -webkit-mask-image: url(../../../assets/icons/ollama.svg);
@@ -3352,8 +3547,16 @@ html.is-windows .settings-panel select option {
   mask-image: url(../../../assets/icons/xiaomi.svg);
 }
 .limit-icon-thirdparty {
+  -webkit-mask-image: url(../../../assets/icons/thirdparty.svg);
+  mask-image: url(../../../assets/icons/thirdparty.svg);
+}
+.limit-icon-newapi {
   -webkit-mask-image: url(../../../assets/icons/newapi.svg);
   mask-image: url(../../../assets/icons/newapi.svg);
+}
+.limit-icon-sub2api {
+  -webkit-mask-image: url(../../../assets/icons/sub2api.svg);
+  mask-image: url(../../../assets/icons/sub2api.svg);
 }
 .row-label {
   display: grid;
@@ -3661,6 +3864,114 @@ html.is-windows .settings-panel select option {
 .limit-row-group {
   gap: 8px;
 }
+.codex-reset-forecast {
+  position: relative;
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 8px 0 0;
+  color: var(--muted);
+}
+.limit-row:has(> .codex-reset-forecast) {
+  padding-bottom: 7px;
+}
+.codex-reset-forecast-open {
+  position: absolute;
+  z-index: 0;
+  inset: 0;
+  width: 100%;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.codex-reset-forecast-head {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  pointer-events: none;
+}
+.codex-reset-forecast-title {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+}
+.codex-reset-forecast-label {
+  color: var(--text);
+  font-size: 10px;
+  font-weight: 600;
+}
+.codex-reset-forecast-value {
+  overflow: hidden;
+  color: var(--text);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.codex-reset-forecast-detail {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  font-size: 9px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.codex-reset-forecast:hover :is(.codex-reset-forecast-label, .codex-reset-forecast-value),
+.codex-reset-forecast:has(.codex-reset-forecast-open:focus-visible) :is(.codex-reset-forecast-label, .codex-reset-forecast-value) {
+  color: var(--accent);
+}
+.codex-reset-forecast:has(.codex-reset-forecast-open:focus-visible) {
+  outline: 2px solid rgba(var(--accent-rgb), 0.5);
+  outline-offset: 3px;
+}
+.codex-reset-forecast-info-wrap {
+  z-index: 2;
+  pointer-events: auto;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip {
+  right: auto;
+  left: -1px;
+  width: max-content;
+  max-width: min(230px, calc(100vw - 48px));
+  grid-template-columns: max-content minmax(0, 1fr);
+  font-size: 10px;
+  font-weight: 400;
+  line-height: 1.2;
+  text-align: left;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip::after {
+  right: auto;
+  left: 6px;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip-row span:last-child {
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip.is-below {
+  top: calc(100% + 5px);
+  bottom: auto;
+}
+.codex-reset-forecast-info-wrap .limit-detail-tooltip.is-below::after {
+  top: -4px;
+  bottom: auto;
+  border-top: 1px solid rgba(var(--line-rgb), 0.22);
+  border-right: none;
+  border-bottom: none;
+  border-left: 1px solid rgba(var(--line-rgb), 0.22);
+}
+.codex-reset-forecast.is-loading .codex-reset-forecast-value,
+.codex-reset-forecast.is-unavailable .codex-reset-forecast-value {
+  color: var(--muted);
+}
 /* Spacing lives on the rows, not here, so each account can carry its own
    separator rule in the gap it opens above itself. */
 .limit-account-list {
@@ -3827,7 +4138,8 @@ html.is-windows .limit-live-badge {
   margin-top: 10px;
   padding-top: 10px;
 }
-.limit-account-row + .limit-account-row::before {
+.limit-account-row + .limit-account-row::before,
+.limit-row-group > .codex-reset-forecast::before {
   position: absolute;
   top: 0;
   right: 0;
@@ -3863,6 +4175,12 @@ html.is-windows .limit-live-badge {
   grid-column: 1 / -1;
 }
 .limit-window-text { color: var(--muted); font-size: 10px; }
+.limit-window-text span:first-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .limit-window-text span:last-child { color: var(--text); white-space: nowrap; }
 .limit-meter {
   width: 100%;
@@ -3980,7 +4298,6 @@ html.is-windows .limit-live-badge {
   height: 14px;
   flex: 0 0 14px;
   place-items: center;
-  transform: translateY(-1px);
 }
 .limit-detail-tooltip-trigger {
   display: inline-grid;
@@ -4078,6 +4395,21 @@ html.is-windows .limit-live-badge {
   opacity: 0.54;
   text-align: right;
   white-space: nowrap;
+}
+.codex-reset-forecast-disclaimer {
+  grid-column: 1 / -1;
+  max-width: 210px;
+  margin-top: 2px;
+  padding-top: 5px;
+  border-top: 1px solid rgba(var(--line-rgb), 0.16);
+  color: var(--muted);
+  font-size: 8px;
+  font-weight: 400;
+  line-height: 1.35;
+  opacity: 0.66;
+  overflow-wrap: anywhere;
+  text-align: left;
+  white-space: normal;
 }
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-reduce-motion="off"]) .limit-detail-tooltip {
@@ -4471,6 +4803,47 @@ html.is-windows .limit-live-badge {
   color: var(--muted);
   font-size: 11px;
 }
+.tool-detail-footer {
+  display: grid;
+  height: 30px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  flex: 0 0 104px;
+  overflow: hidden;
+  border: 1px solid rgba(var(--line-rgb), 0.18);
+  border-radius: 7px;
+  background: rgba(var(--overlay-rgb), var(--control-alpha));
+}
+.tool-detail-footer.hidden { display: none; }
+.shell.settings-open .tool-detail-footer { display: none; }
+.tool-detail-footer-option {
+  min-width: 0;
+  padding: 0 7px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+  line-height: 1;
+  transition: color 120ms ease, background 120ms ease;
+}
+.tool-detail-footer-option + .tool-detail-footer-option {
+  border-left: 1px solid rgba(var(--line-rgb), 0.14);
+}
+.tool-detail-footer-option:hover {
+  color: var(--text);
+  background: rgba(var(--overlay-rgb), 0.04);
+}
+.tool-detail-footer-option[aria-pressed="true"] {
+  color: var(--text);
+  background: rgba(var(--accent-rgb), 0.11);
+}
+.tool-detail-footer-option:focus-visible {
+  position: relative;
+  z-index: 1;
+  outline: 2px solid rgba(var(--accent-rgb), 0.32);
+  outline-offset: -2px;
+}
 .view-switcher {
   position: relative;
   display: flex;
@@ -4629,6 +5002,23 @@ html.is-windows .limit-live-badge {
   line-height: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.period-menu {
+  -webkit-app-region: no-drag;
+  top: 34px;
+  right: 42px;
+  bottom: auto;
+  left: auto;
+  width: 132px;
+  pointer-events: auto;
+  transform-origin: right top;
+}
+.period-menu.view-switcher-menu [data-fixed-period] {
+  -webkit-app-region: no-drag;
+  grid-template-columns: minmax(0, 1fr);
+}
+.period-menu.hidden {
+  transform: translateY(-6px) scale(0.985);
 }
 @media (prefers-reduced-motion: reduce) {
   :root:not([data-reduce-motion="off"]) .view-switcher-menu {
@@ -4861,6 +5251,9 @@ html.is-windows .limit-live-badge {
 #zaiteamManualPanel.hidden,
 #volcengineManualPanel.hidden,
 #qoderManualPanel.hidden,
+#traeManualPanel.hidden,
+#zedManualPanel.hidden,
+#commandcodeManualPanel.hidden,
 #ollamaManualPanel.hidden,
 #mimoManualPanel.hidden,
 #kimiManualPanel.hidden,
@@ -4870,7 +5263,9 @@ html.is-windows .limit-live-badge {
 #opencodeErrorMessage.hidden,
 #openrouterErrorMessage.hidden,
 #thirdpartyErrorMessage.hidden,
+#thirdpartySub2ApiSteps.hidden,
 #thirdpartyAccessTokenRow.hidden,
+#thirdpartyRefreshTokenRow.hidden,
 #thirdpartyUserIdRow.hidden,
 #thirdpartyApiKeyRow.hidden,
 #thirdpartyModeField.hidden,
@@ -4881,6 +5276,9 @@ html.is-windows .limit-live-badge {
 #zaiteamErrorMessage.hidden,
 #volcengineErrorMessage.hidden,
 #qoderErrorMessage.hidden,
+#traeErrorMessage.hidden,
+#zedErrorMessage.hidden,
+#commandcodeErrorMessage.hidden,
 #ollamaErrorMessage.hidden,
 #kimiErrorMessage.hidden,
 #copilotErrorMessage.hidden,
@@ -4894,6 +5292,9 @@ html.is-windows .limit-live-badge {
 #zaiteamManualPanel,
 #volcengineManualPanel,
 #qoderManualPanel,
+#traeManualPanel,
+#zedManualPanel,
+#commandcodeManualPanel,
 #ollamaManualPanel,
 #mimoManualPanel,
 #kimiManualPanel,
@@ -4909,6 +5310,9 @@ html.is-windows .limit-live-badge {
 #zaiteamManualPanel > .accordion-animation-inner,
 #volcengineManualPanel > .accordion-animation-inner,
 #qoderManualPanel > .accordion-animation-inner,
+#traeManualPanel > .accordion-animation-inner,
+#zedManualPanel > .accordion-animation-inner,
+#commandcodeManualPanel > .accordion-animation-inner,
 #ollamaManualPanel > .accordion-animation-inner,
 #mimoManualPanel > .accordion-animation-inner,
 #kimiManualPanel > .accordion-animation-inner {
@@ -4941,10 +5345,14 @@ html.is-windows .limit-live-badge {
 #volcengineManualPanel input,
 #qoderManualPanel textarea,
 #qoderManualPanel select,
+#traeManualPanel input,
+#zedManualPanel textarea,
+#commandcodeManualPanel textarea,
 #ollamaManualPanel textarea,
 #mimoManualPanel input,
 #mimoManualPanel textarea,
 #kimiManualPanel input,
+#kimiManualPanel textarea,
 #copilotManualDetails input {
   width: 100%;
   font-size: 12px;
@@ -4969,10 +5377,14 @@ html.is-windows .limit-live-badge {
 #zaiteamManualPanel input,
 #volcengineManualPanel input,
 #qoderManualPanel textarea,
+#traeManualPanel input,
+#zedManualPanel textarea,
+#commandcodeManualPanel textarea,
 #ollamaManualPanel textarea,
 #mimoManualPanel input,
 #mimoManualPanel textarea,
 #kimiManualPanel input,
+#kimiManualPanel textarea,
 #copilotManualDetails input {
   font-family: monospace;
 }
@@ -5020,8 +5432,10 @@ html.is-windows .limit-live-badge {
 .detail-role-user { color: #bda5f5; }
 .detail-role-sep { color: var(--muted); }
 .detail-turn-title { color: var(--muted); }
-.row.session-row[data-client="claude"], .row.session-row[data-client="codex"], .row.session-row[data-client="opencode"] { cursor: pointer; }
-.row.session-row[data-client="claude"] .row-metrics::after, .row.session-row[data-client="codex"] .row-metrics::after, .row.session-row[data-client="opencode"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
+.row.session-row[data-client="claude"], .row.session-row[data-client="codex"], .row.session-row[data-client="opencode"], .row.session-row[data-client="reasonix"], .row.session-row[data-client="dsh"] { cursor: pointer; }
+.row.session-row[data-client="claude"] .row-metrics::after, .row.session-row[data-client="codex"] .row-metrics::after, .row.session-row[data-client="opencode"] .row-metrics::after, .row.session-row[data-client="reasonix"] .row-metrics::after, .row.session-row[data-client="dsh"] .row-metrics::after { content: '›'; color: var(--muted); font-size: 14px; line-height: 1; }
+.row.session-row[data-client="reasonix"][data-detail-unavailable="true"] { cursor: default; }
+.row.session-row[data-client="reasonix"][data-detail-unavailable="true"] .row-metrics::after { content: none; }
 .view-preference-row.has-subgroup {
   grid-template-columns: minmax(0, 1fr) repeat(3, 22px);
 }
@@ -5231,6 +5645,7 @@ html.is-windows .limit-live-badge {
   align-items: baseline;
   gap: 12px;
   font-size: 11px;
+  line-height: 1.35;
 }
 .accordion-label {
   color: var(--muted);
@@ -5239,6 +5654,12 @@ html.is-windows .limit-live-badge {
   display: flex;
   align-items: baseline;
   gap: 6px;
+  white-space: nowrap;
+}
+.accordion-item-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 .device-breakdown { gap: 6px; }
@@ -5410,6 +5831,23 @@ html.is-windows .limit-live-badge {
 .opencode-profile-list {
   margin-bottom: 4px;
 }
+/* This stylesheet has no global `.hidden`; every use is scoped to its own
+   selector, so the credential blocks need their own rule to disappear. */
+.opencode-credential-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+.opencode-credential-fields.hidden { display: none; }
+/* The API key field sits outside .settings-row, so it needs the same explicit
+   sizing that rule gives the labelled controls. */
+.opencode-credential-fields > input {
+  width: 100%;
+  box-sizing: border-box;
+  height: 30px;
+  font-family: monospace;
+  font-size: 12px;
+}
 .opencode-empty {
   padding: 16px 8px;
   color: var(--muted);
@@ -5421,7 +5859,10 @@ html.is-windows .limit-live-badge {
   display: grid;
   grid-template-columns: 20px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  /* No row gap: the credential list is the only second-row child and it stays
+     in the grid while collapsed, so a row gap would pad every multi-credential
+     row by that much even when nothing is shown. It carries its own margin. */
+  gap: 0 8px;
   min-width: 0;
   padding: 7px 8px;
   border: 1px solid var(--line);
@@ -5434,6 +5875,155 @@ html.is-windows .limit-live-badge {
   height: 14px;
   padding: 0;
 }
+/* The auto-detected credential is not a stored account, so its row carries no
+   toggle or delete, and an empty first cell keeps it on the same grid. Its name
+   field rests as the row's label and only looks like an input once pointed at,
+   so an unnamed row does not read as an unfinished form. */
+.opencode-profile-item .profile-name-input.is-placeholder {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+  /* Pulls the field's own padding back so its text starts on the same column as
+     the plain names above it; only the highlight box overhangs once hovered. */
+  margin-left: -5px;
+}
+.opencode-profile-item .profile-name-input.is-placeholder:hover,
+.opencode-profile-item .profile-name-input.is-placeholder:focus {
+  border-color: rgba(var(--accent-rgb), 0.6);
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+}
+/* Acting on a single credential lives in the expanded section, not inline next
+   to the account's own controls: unbinding is one click and should not sit a
+   pixel away from the control that disables the whole account. */
+/* The summary line is itself the control that expands it. A chevron trails the
+   text so the affordance sits on the thing being revealed, rather than as a
+   separate button stranded between the status text and delete. */
+.opencode-profile-item button.profile-detail {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.opencode-profile-item .profile-detail.is-expandable:hover,
+.opencode-profile-item .profile-detail.is-expandable:focus-visible {
+  color: var(--text);
+}
+/* Right when closed, down when open. The shared chevron points down at rest and
+   the app-wide rule rotates it to up; these two selectors are more specific, so
+   they win, and the shared transition still animates the turn.
+   `.cursor-account-group.expanded .cursor-disclosure-icon` is a descendant rule,
+   so an icon nested inside an expanded group inherits its rotation — which is
+   why the nested fallback group needs its own pair as well. */
+.opencode-profile-item .profile-detail .cursor-disclosure-icon {
+  transform: rotate(-90deg);
+}
+.opencode-profile-item .profile-detail.is-open .cursor-disclosure-icon {
+  transform: rotate(0deg);
+}
+/* The summary line runs at 9px, so the group-header size reads as an oversized
+   arrow next to it. Scaled to the text it belongs to. */
+.opencode-profile-item .profile-detail .cursor-disclosure-icon {
+  width: 9px;
+  height: 9px;
+}
+.opencode-profile-item .profile-detail .cursor-disclosure-icon::before {
+  width: 4px;
+  height: 4px;
+  border-width: 0 1.2px 1.2px 0;
+}
+#opencodeLocalFallbackAccountGroup > .settings-group-header .cursor-disclosure-icon {
+  transform: rotate(-90deg);
+}
+#opencodeLocalFallbackAccountGroup.expanded > .settings-group-header .cursor-disclosure-icon {
+  transform: rotate(0deg);
+}
+/* The relocated toggle keeps only its description, and a paragraph's
+   content-based flex basis is wide enough to claim the whole line on its own,
+   pushing the switch to a second row. A zero basis lets both share the line and
+   the text reflow into the space that is left. */
+#opencodeLocalFallbackInner .settings-item > .settings-item-text {
+  flex: 1 1 0;
+}
+/* Animated like every other disclosure in the panel rather than snapping from
+   `display: none`; the container squeezes a single inner wrapper, so the rows
+   have to live inside one. */
+.opencode-credential-list {
+  grid-column: 2 / -1;
+  margin-top: 6px;
+}
+.opencode-credential-list > .accordion-animation-inner {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.opencode-credential-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+  padding: 3px 0 3px 8px;
+  border-left: 1px solid var(--line);
+}
+/* One shared column width. Sized to their own content, each label took a
+   different width and the name fields started at a different x on every row,
+   which is what made an expanded account look ragged: most visible once a field
+   is focused and its box appears. */
+.opencode-credential-row .credential-label {
+  flex: 0 0 5.4em;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+  font-size: 10px;
+}
+/* Always visible: two credentials showing the same name is the reason they are
+   one account, so the name is the row's content rather than something behind an
+   edit button. */
+.opencode-credential-row .credential-name-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  box-sizing: border-box;
+  font-size: 11px;
+  /* Rests as text and only looks like a field once pointed at: an expanded
+     account otherwise reads as a form waiting to be filled in, when what it is
+     showing is which name each credential already answers to. */
+  border: 1px solid transparent;
+  background: transparent;
+}
+.opencode-credential-row .credential-name-input:hover,
+.opencode-credential-row .credential-name-input:focus {
+  border-color: rgba(var(--accent-rgb), 0.6);
+  background: rgba(0, 0, 0, 0.2);
+}
+.opencode-credential-row .credential-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+/* Merging asserts two credentials are one account, so confirming is a button
+   the user chooses rather than a keypress they repeat. */
+.credential-merge-btn {
+  padding: 2px 6px;
+  border: 1px solid rgba(var(--accent-rgb), 0.35);
+  border-radius: 4px;
+  background: rgba(var(--accent-rgb), 0.08);
+  color: var(--text);
+  font: inherit;
+  font-size: 10px;
+  line-height: 1.3;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.credential-merge-btn.hidden { display: none; }
+.opencode-credential-row .credential-merge-btn { flex: 0 0 auto; }
 .opencode-profile-item .profile-name-box {
   display: grid;
   grid-template-columns: minmax(0, max-content) auto minmax(0, 1fr);
@@ -5443,6 +6033,22 @@ html.is-windows .limit-live-badge {
   align-items: center;
   gap: 1px 4px;
   min-width: 0;
+}
+/* Merging is an OpenCode-only affordance, so only that list carries the extra
+   row; the shared grid stays two rows for the other profile lists. It needs a
+   row of its own because the label carries the target account name, which is
+   far wider than the cell beside the rename button, and auto-placement would
+   otherwise drop it into whichever cell happened to be free. */
+#opencodeProfileList .opencode-profile-item .profile-name-box {
+  grid-template-areas:
+    "name rename ."
+    "merge merge merge"
+    "detail detail detail";
+}
+#opencodeProfileList .opencode-profile-item .profile-name-box > .credential-merge-btn {
+  grid-area: merge;
+  justify-self: start;
+  margin-top: 3px;
 }
 .opencode-profile-item .profile-name {
   grid-area: name;
@@ -5585,6 +6191,12 @@ html.is-windows .limit-live-badge {
 .opencode-add-details {
   margin-top: 8px;
 }
+/* Cursor sits below both the account list and its own provider copy, so the
+   shared add-details margin doubles the visual step before the first action.
+   The form wrapper already supplies the same separation used by MiMo. */
+#cursorManualDetails {
+  margin-top: 0;
+}
 .opencode-add-body {
   display: flex;
   flex-direction: column;
@@ -5603,9 +6215,30 @@ html.is-windows .limit-live-badge {
   color: var(--muted);
   white-space: nowrap;
 }
-.opencode-add-body .settings-row input {
+/* `select` is listed alongside `input` for the reason spelled out above
+   .subscription-add-body: the global `button, input, select { font: inherit }`
+   otherwise drops a select back to the panel's base size, and the two carry
+   different paddings, so the height is pinned to keep the rows aligned. */
+.opencode-add-body .settings-row :is(input, select) {
   flex: 1;
+  min-width: 0;
+  height: 30px;
+  box-sizing: border-box;
   font-size: 12px;
+}
+/* The Agent Plan override borrows the disclosure chrome above, but that form's
+   rows put a short label beside its input, and these labels are full field
+   names, so the three inputs ended up at three different widths. Fall back to
+   the stacked row the rest of the Volcengine card already uses. */
+#volcengineAgentDetails .settings-row {
+  display: block;
+}
+#volcengineAgentDetails .settings-row label {
+  white-space: normal;
+}
+#volcengineAgentDetails .settings-row :is(input, select) {
+  height: auto;
+  font-size: inherit;
 }
 .opencode-add-body textarea {
   width: 100%;
@@ -5648,7 +6281,7 @@ html.is-windows .limit-live-badge {
   min-width: 0;
   height: 30px;
   box-sizing: border-box;
-  font-size: 11px;
+  font-size: 12px;
 }
 .thirdparty-mode-hint {
   min-height: 30px;
@@ -5872,7 +6505,7 @@ html.is-windows .limit-live-badge {
 .tray-composer-menubar-title {
   overflow: hidden;
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
+  font-family: var(--display-font, -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif);
   font-size: 13px;
   font-weight: 500;
   letter-spacing: -0.01em;

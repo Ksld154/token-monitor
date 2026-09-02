@@ -2,10 +2,11 @@
 
 const fs = require('node:fs');
 const crypto = require('node:crypto');
+const os = require('node:os');
 const path = require('node:path');
-const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, net, Notification, screen, session, shell } = require('electron');
+const { app, BrowserWindow, clipboard, dialog, globalShortcut, ipcMain, nativeImage, nativeTheme, net, Notification, screen, session, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');
-const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, sharedDataDir } = require('../shared/config');
+const { defaultDeviceId, generateHubSecret, lanIpv4Addresses, loadDotEnv, pidFilePath, readJson, sharedDataDir } = require('../shared/config');
 const {
   CredentialStore,
   credentialSettingsForRenderer,
@@ -17,10 +18,20 @@ const {
 } = require('../shared/credentialStore');
 const { installSafeStdout } = require('../shared/safeStdio');
 const { appVersion } = require('../shared/appVersion');
+const { macWidgetRuntimeSupport } = require('../shared/macSystemRequirements');
 const { exportFileSet, exportSignature, EXPORT_FILENAMES } = require('../shared/exporter');
 const { createDefaultTrayLayout, normalizeTrayLayout } = require('../shared/trayLayout');
+const fontSettingsApi = require('../shared/fontSettings');
 const motionPreferenceApi = require('./motionPreference');
+const { createClientSourceIpcHandlers } = require('./clientSourceIpc');
 const { createClaudeWebFetch } = require('./claudeWebFetch');
+const { runAntigravityOAuthLogin } = require('./antigravityOAuthLogin');
+const antigravityOAuth = require('../shared/antigravityOAuth');
+const {
+  createWorkbuddyLocalAuth,
+  isSupportedWorkbuddyLocalAppPlatform
+} = require('./workbuddyLocalAuth');
+const { createElectronLimitsFetch } = require('./limitsFetch');
 const {
   expandedBoundsForCollapse,
   normalWindowBounds,
@@ -39,17 +50,51 @@ const {
 // event and Electron pops a "JavaScript error in the main process" dialog.
 installSafeStdout();
 const electronClaudeWebFetch = createClaudeWebFetch(net);
+const electronWorkbuddyLocalAuth = createWorkbuddyLocalAuth({
+  fetch: electronLimitsFetch()
+});
+// One transport for every widget provider call that resolves through
+// `deps.fetch` — see limitsFetch.js for why the branch and the request options
+// are what they are. Probes that build their own transport inherit neither
+// branch: cursorProbe and antigravityProbe on node:https, Claude Web on the
+// claudeWebFetch above, the CLI fallbacks on a spawned binary.
+function electronLimitsFetch() {
+  return createElectronLimitsFetch({ net, env: process.env });
+}
+
+// Settings-side provider probes take the same transport as the collector's.
+// Most of them are what an account save is gated on, so leaving one on the
+// global fetch refuses to save an account on exactly the machines this
+// transport exists for.
+function electronProviderDeps(deps = {}) {
+  return { ...deps, fetch: electronLimitsFetch() };
+}
 const { DEFAULT_CLIENTS, KNOWN_CLIENTS, clientsCsvForSetting } = require('../shared/clientTracking');
-const { clientDiagnosticRoots, lookupModelPricing, normalizeHistoryIntervalMs } = require('../shared/collector');
+const {
+  antigravitySyncLockPath,
+  clientDiagnosticRoots,
+  lookupModelPricing,
+  normalizeHistoryIntervalMs,
+  repairAntigravitySyncLock,
+  visibleDiagnosticRoots
+} = require('../shared/collector');
+const { deviceRecordFromAnchor } = require('../shared/anchorSeed');
+const { sendWhenRendererReady } = require('./deferredWindowSend');
+const { applyInitialLimitProviderSeed } = require('./initialLimitProviderSeed');
 const { createDeviceRuntime } = require('../shared/deviceRuntime');
+const { createDiagnosticJournal } = require('../shared/diagnosticJournal');
+const { createDiagnosticReportGenerator } = require('./diagnostics');
+const { createDiagnosticSnapshotBuilder, diagnosticStreamDetailCode, selectLocalDeviceRecord } = require('./diagnosticSnapshot');
 const { customPricingPath } = require('../shared/tokscaleConfig');
 const { applyCustomPricing, normalizeCustomPricingSetting } = require('../shared/tokscaleCustomPricing');
 const { createHub } = require('../hub/server');
-const { claudeWebCookie, deepseekToken, fetchClaudeLimits, normalizeClaudeWebCookieInput, normalizeLimitsRefreshMs, parseBoolean, parseLimitProviders, runCodexLogin, minimaxToken, copilotToken, zaiToken, zaiRegion, zaiTeamToken, volcengineCredentials, qoderCookie, kimiToken, kimiWebToken, ollamaSessionCookie } = require('../shared/limitCollector');
+const { probeHubBuild } = require('./hubBuildStatus');
+const { claudeWebCookie, deepseekToken, fetchClaudeLimits, normalizeClaudeWebCookieInput, normalizeLimitsRefreshMode, normalizeLimitsRefreshMs, parseBoolean, parseLimitProviders, runCodexLogin, minimaxToken, copilotToken, zaiToken, zaiRegion, zaiTeamToken, volcengineCredentials, qoderCookie, traeAccessToken, traeDeviceId, commandcodeCookie, kimiToken, kimiWebToken, ollamaSessionCookie, zedCookie } = require('../shared/limitCollector');
 const { fetchOllamaLimits, rememberOllamaValidation } = require('../shared/ollamaLimits');
 const { copilotLoginErrorMessage, isAllowedVerificationUrl, runCopilotDeviceFlowLogin } = require('../shared/copilotDeviceFlow');
 const {
   codexAuthIdentity,
+  codexAccountKey,
   codexManagedAccountIdentityKey,
   codexManagedAccountMatchesIdentity,
   hashAccountKey,
@@ -57,12 +102,9 @@ const {
   upgradeCodexManagedAccountIdentity
 } = require('../shared/codexAuth');
 const { codexLoginUrlFromOutput, isAllowedCodexLoginUrl } = require('../shared/codexLogin');
+const { listCodexWorkspaces, normalizeWorkspaceId } = require('../shared/codexWorkspaces');
 const {
-  authWithSelectedCodexWorkspace,
-  listCodexWorkspaces,
-  normalizeWorkspaceId
-} = require('../shared/codexWorkspaces');
-const {
+  codexAuthMaterialForWorkspace,
   codexAccountMatchesIdentity,
   liveCodexAuthPath,
   readCodexAuthMaterial,
@@ -73,6 +115,7 @@ const {
   normalizeHiddenClients,
   normalizePinnedClients
 } = require('./renderer/clientDisplayPreferences');
+const { normalizeRankingMetric } = require('./renderer/usageAttributionRows');
 const { LANGUAGE_OPTIONS, resolveLocale, translate } = require('./renderer/i18n');
 const {
   defaultViewDisplayPreferences,
@@ -97,16 +140,57 @@ const {
   checkLatestRelease,
   deriveAppUpdateAvailability,
   downloadedAppUpdateMatchesLatest,
+  installFailureErrorKind,
   latestFromUpdaterInfo,
   mergeLatestReleaseMetadata,
   providerUpdateCheckAvailability,
   resolveAppUpdateCheckError,
   shouldDownloadAutomaticAppUpdate,
-  shouldSkipAppUpdateCheck
+  shouldSkipAppUpdateCheck,
+  updateInstallQuitPolicy
 } = require('../shared/appUpdater');
 const cursorAuth = require('../shared/cursorAuth');
 const cursorProbe = require('../shared/cursorProbe');
 const opencodeWeb = require('../shared/opencodeWeb');
+const opencodeGoApi = require('../shared/opencodeGoApi');
+const opencodeProfiles = require('../shared/opencodeProfiles');
+
+// The collector reaches the usage API behind a probe deadline; these settings
+// paths call it directly, so they need their own bound or a hung request leaves
+// the account panel spinning and "Save account" pending forever.
+const OPENCODE_API_PROBE_TIMEOUT_MS = 15_000;
+
+// The auto-detected key has an account of its own for exactly as long as no
+// stored account claims it. Ownership is the shared predicate the collector
+// uses, so the panel never offers a row the collector is not scanning.
+// The auto-detected account is not addressable by name, because it has none.
+// Every credential mutation queues an account-scoped refresh, and a scoped
+// refresh rebuilds only the account it names, so nothing could ever create its
+// row or retire it: removing the credential that claimed the key left the card
+// without the account that took it over, and naming it left the old synthetic
+// row behind. When ownership of the key changes, the whole provider is rebuilt.
+function refreshOpencodeAmbientOwnership(wasActive) {
+  if (opencodeAmbientKeyActive(settings.opencodeProfiles || {}) === wasActive) return;
+  void queueLimitInvalidation({ provider: 'opencode' }, 'ambient-ownership', { clear: true });
+}
+
+function opencodeAmbientKeyActive(profiles) {
+  const ambientKey = opencodeGoApi.readGoApiKey(process.env);
+  if (!ambientKey) return false;
+  const ambientIdentity = opencodeGoApi.goApiIdentity(ambientKey);
+  return !opencodeProfiles.ambientKeyClaimed(profiles, ambientKey, ambientIdentity);
+}
+
+async function probeOpenCodeApiKey(apiKey) {
+  try {
+    return await opencodeGoApi.fetchGoApi(apiKey, {
+      fetch: electronLimitsFetch(),
+      signal: AbortSignal.timeout(OPENCODE_API_PROBE_TIMEOUT_MS)
+    });
+  } catch (_) {
+    return { status: 'unavailable', windows: [] };
+  }
+}
 const openrouterLimits = require('../shared/openrouterLimits');
 const thirdPartyLimits = require('../shared/thirdPartyLimits');
 const subscriptionDisplay = require('../shared/subscriptionDisplay');
@@ -125,6 +209,7 @@ const {
   clearSessionUsageArchive,
   normalizeSessionUsageArchive,
   readSessionUsageArchive,
+  sessionUsageArchivePath,
   sessionUsageArchiveDate,
   writeSessionUsageArchive
 } = require('../shared/sessionUsageArchive');
@@ -138,9 +223,31 @@ const {
   fetchMimoLimits,
   normalizeMimoCookieHeader
 } = require('../shared/mimoLimits');
-const { historyPreview, historyRevision } = require('../shared/history');
+const { deviceHistoryRevision, historyPreview, historyRevision } = require('../shared/history');
+const { completeHistorySource, resolveCompleteHistory, resolveCompleteHistoryWithDevices } = require('./historySource');
+const { fixedPeriodHistoryMeta } = require('./fixedPeriodHistory');
 const { readSessionDetailForPlatform } = require('../shared/sessionDetailResolver');
 const { startDiscordRpc, stopDiscordRpc, updateDiscordRpc } = require('./discordRpc');
+const {
+  commitMacWidgetSnapshot,
+  discardMacWidgetSnapshot,
+  prepareMacWidgetSnapshotUpdate,
+  resolveMacWidgetSnapshotPath,
+  syncMacWidgetSnapshotDirectory
+} = require('./macWidgetBridge');
+const { createMacWidgetSnapshotController } = require('./macWidgetSnapshotController');
+const { macWidgetHistorySourceKey, resolveMacWidgetHistory } = require('./macWidgetHistory');
+const {
+  macWidgetHistoryCachePath,
+  readMacWidgetHistoryCache,
+  writeMacWidgetHistoryCache
+} = require('./macWidgetHistoryStore');
+const { parseMacWidgetDeepLink } = require('./macWidgetDeepLink');
+const { createMacWidgetLaunchServicesRecovery } = require('./macWidgetLaunchServicesRecovery');
+const { projectLimitStatsForDisplay } = require('./limitStatsPresentation');
+const { normalizeWidgetURLScheme } = require('../shared/macWidgetConfig');
+const { DEFAULT_WIDGET_KIND, requestMacWidgetReload, resetMacWidgetReloadThrottle } = require('./macWidgetReloader');
+const { WIDGET_DEMAND_MARKER, WIDGET_DEMAND_PROVISIONAL_MARKER, createMacWidgetDemandState } = require('./macWidgetDemand');
 const linuxAutostart = require('./linuxAutostart');
 const { codexAccountIdForProvider, localLiveCodexProvider } = require('./renderer/accountIdentity');
 const {
@@ -149,8 +256,12 @@ const {
   formatTrayText,
   isBarsTrayIconMode,
   pickUsageTrayIconId,
+  parseWindowsSystemUsesLightTheme,
   popoverBounds,
+  prepareTrayIconForPlatform,
   reconcileCodexAccountSelection,
+  runTrayMenuAction,
+  watchSystemDarkUi,
   sortCodexAccountsForDisplay,
   shouldUseTemplateTrayIcon,
   trayShowsTitle
@@ -160,16 +271,28 @@ const {
   mainWindowCloseAction,
   normalizeTrayModeSettings,
   shouldCreateTray,
+  skipTaskbarForSettings,
   trayToggleAction
 } = require('./trayModeSettings');
 const { SERVICE_STATUS_PROVIDERS, createServiceStatusClient } = require('./serviceStatus');
+const { createCodexResetForecastClient } = require('./codexResetForecast');
+const { createUpdateInstallQuitGuard, observeUpdateInstallHandoff } = require('./updateInstallQuit');
 const { classifyStreamFailure } = require('./syncConnection');
-const { composeLocalSyncStats } = require('./syncDisplayStats');
+const {
+  attachLocalNativeViews,
+  attachLocalPresentationNativeViews,
+  composeLocalSyncStats
+} = require('./syncDisplayStats');
 const { createSyncUploadScheduler, normalizeSyncUploadIntervalMs } = require('./syncUploadScheduler');
+const { createLatestWinsReconciler } = require('./latestWinsReconciler');
 const {
   classifySettingsChange,
+  diagnosticConfigurationFromSettings,
   envelopeFromSettings,
   limitsConfigFromSettings,
+  normalizeCursorAccountIds,
+  normalizeCursorDisabledAccountIds,
+  usageConfigFingerprint,
   usageConfigFromSettings
 } = require('./runtimeConfig');
 const {
@@ -179,7 +302,14 @@ const {
   runManualDeviceRefresh,
   settingsLimitInvalidationPlan
 } = require('./deviceRuntimeCoordinator');
-const { describeWindowBehavior, normalizeWindowBehaviorSettings } = require('./windowBehavior');
+const {
+  describeWindowBehavior,
+  floatingAlwaysOnTopLevel,
+  normalizeWindowBehaviorSettings,
+  windowBehaviorSelection
+} = require('./windowBehavior');
+const { createTaskbarZOrderKeeper, taskbarZOrderEnabled } = require('./windowsTaskbarZOrder');
+const { subscribeForegroundChange } = require('./windowsForegroundHook');
 const {
   normalizeWindowToggleShortcut,
   windowToggleShortcutAction,
@@ -209,11 +339,31 @@ const {
   normalizeWindowsBackdropMode
 } = require('./windowsBackdropMode');
 const { applyWindowsAccentBlur } = require('./windowsBackdrop');
+const {
+  attachNativeMaterialVisibility,
+  syncNativeMaterialVisibility
+} = require('./nativeMaterialVisibility');
 
 if (!app.isPackaged) loadDotEnv();
 
 const APP_NAME = 'Token Monitor';
 const APP_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon.png');
+const WINDOWS_APP_ICON_PATH = path.join(__dirname, '..', '..', 'assets', 'icon-win.png');
+
+// Electron's own documentation says a window given no icon falls back to the
+// executable's, and recommends ICO on Windows; electron-builder already
+// converts `win.icon` into the ICO embedded in that executable, which is the
+// icon built for this platform rather than one PNG scaled at runtime. So a
+// packaged window deliberately sets
+// nothing here: whatever it set could only override that, which is exactly what
+// naming the macOS artwork was doing to the taskbar button and Alt-Tab entry
+// (it carries the Dock's inset margin — see WINDOWS_ICON_PATH in tray.js). An
+// unpackaged run has no icon of ours inside electron.exe to inherit, so it names
+// the same full-bleed artwork the installer is built from.
+function appWindowIcon() {
+  if (process.platform !== 'win32') return { icon: APP_ICON_PATH };
+  return app.isPackaged ? {} : { icon: WINDOWS_APP_ICON_PATH };
+}
 
 const DEFAULT_WINDOW = { width: 340, height: 650 };
 const WINDOW_LIMITS = { minWidth: 240, minHeight: 140, maxWidth: 1200, maxHeight: 1400 };
@@ -249,17 +399,31 @@ const DEFAULT_HOME_MODULE_LIST = ['limits', 'tool', 'device', 'model', 'trends']
 const TRAY_OPEN_VIEW_IDS = new Set(['home', 'project', 'session', 'limits', 'trends', 'status']);
 
 let mainWindow = null;
+let mainWindowNativeBlurEnabled = false;
 let dashboardWindow = null;
+let dashboardWindowNativeBlurEnabled = false;
 let settingsPath = null;
 let settings = null;
+let initialLimitProvidersPending = false;
 let claudeWebCookieMutationRevision = 0;
 let persistedSettingsSnapshot = null;
 let credentialStore = null;
 let credentialStorageErrorShown = false;
+let antigravityOAuthLoginController = null;
 let sessionUsageArchive = null;
+let lastSessionUsageArchiveUpdate = {
+  at: null,
+  durationMs: null,
+  failureCode: null
+};
 let rendererViewState = normalizeInitialRendererViewState();
 const serviceStatusClient = createServiceStatusClient();
+const codexResetForecastClient = createCodexResetForecastClient({
+  fetchImpl: electronLimitsFetch()
+});
 const STATUS_PAGE_HOSTS = new Set(SERVICE_STATUS_PROVIDERS.map((provider) => new URL(provider.pageUrl).hostname));
+const diagnosticJournal = createDiagnosticJournal();
+const recoverMacWidgetLaunchServicesRegistration = createMacWidgetLaunchServicesRecovery();
 
 app.setName(APP_NAME);
 if (process.platform === 'win32') app.setAppUserModelId('com.javis.tokenmonitor');
@@ -269,12 +433,27 @@ if (!gotLock) app.exit(0);
 
 const HOME_LIMIT_ACCOUNT_COUNT_DEFAULT = 3;
 const HOME_LIMIT_ACCOUNT_COUNT_MAX = 12;
+const PERIOD_MONTH_MODES = new Set(['month', 'week', 'last7', 'last30']);
+
+function normalizePeriodMonthMode(value) {
+  return PERIOD_MONTH_MODES.has(value) ? value : 'month';
+}
 
 function normalizeHomeLimitAccountCount(value) {
   const count = Math.trunc(Number(value));
   if (!Number.isFinite(count)) return HOME_LIMIT_ACCOUNT_COUNT_DEFAULT;
   return Math.max(1, Math.min(HOME_LIMIT_ACCOUNT_COUNT_MAX, count));
 }
+
+let pendingMacWidgetOpen = null;
+app.on('open-url', (event, url) => {
+  const urlScheme = macWidgetConfiguration()?.urlScheme || 'token-monitor';
+  const destination = parseMacWidgetDeepLink(url, urlScheme);
+  if (!destination) return;
+  event.preventDefault();
+  pendingMacWidgetOpen = destination;
+  if (app.isReady()) setImmediate(openMainWindowFromWidget);
+});
 
 function defaultSettings() {
   const envHubUrl = process.env.TOKEN_MONITOR_HUB_URL || '';
@@ -291,6 +470,7 @@ function defaultSettings() {
     secret: process.env.TOKEN_MONITOR_SECRET || '',
     windowBehavior,
     alwaysOnTop: windowBehavior === 'floating',
+    keepAboveTaskbar: false,
     refreshMs: Number(process.env.TOKEN_MONITOR_WIDGET_REFRESH_MS || 15000),
     glassOpacity: 68,
     glassBlur: 32,
@@ -304,9 +484,13 @@ function defaultSettings() {
     compactTokenUnits: 'western',
     tokenRateMode: 'speed',
     heatmapMetric: 'cost',
+    modelRankingMetric: 'tokens',
     homeActiveDaysWindow: 'all',
+    periodMonthMode: 'month',
     themeColors: {},
     vendorColors: {},
+    interfaceFontFamily: '',
+    displayFontFamily: fontSettingsApi.DEFAULT_DISPLAY_FONT,
     floatingBubbleEnabled: false,
     floatingBubbleTrigger: 'click',
     floatingBubbleContent: 'icon',
@@ -349,10 +533,22 @@ function defaultSettings() {
     homeLimitProviderOrder: '',
     hiddenHomeLimitProviders: '',
     homeLimitAccountCount: HOME_LIMIT_ACCOUNT_COUNT_DEFAULT,
+    limitsRefreshMode: normalizeLimitsRefreshMode(process.env.TOKEN_MONITOR_LIMITS_REFRESH_MODE),
     limitsRefreshMs: normalizeLimitsRefreshMs(process.env.TOKEN_MONITOR_LIMITS_REFRESH_MS),
+    cursorDisabledAccountIds: [],
+    cursorManualAccountIds: [],
     showLimitSource: parseBoolean(process.env.TOKEN_MONITOR_SHOW_LIMIT_SOURCE, false),
     maskLimitAccountEmails: false,
     claudePrepaidBalanceEnabled: parseBoolean(process.env.TOKEN_MONITOR_CLAUDE_PREPAID_BALANCE, true),
+    // The key OpenCode stores for itself needs no setup, so tracking it is the
+    // default. This turns that off for a machine that is signed in to an account
+    // the user does not want reported.
+    opencodeAmbientEnabled: parseBoolean(process.env.TOKEN_MONITOR_OPENCODE_AMBIENT, true),
+    opencodeLocalLimitsEnabled: false,
+    // Third-party global reset predictions are opt-in and remain separate from
+    // the account-specific limits wire shape.
+    codexResetForecastEnabled: false,
+    showCodexAdditionalLimits: true,
     showLimitUsed: parseBoolean(process.env.TOKEN_MONITOR_SHOW_LIMIT_USED, false),
     // Manual subscription metadata. Plain preferences, not credentials, so they
     // live in settings.json and cross to the renderer unredacted.
@@ -369,6 +565,7 @@ function defaultSettings() {
     zoomFactor: 1,
     showTrayIcon: true,
     trayMode: false,
+    hideAppIcon: false,
     trayContent: 'tokens',
     trayCustomLayout: createDefaultTrayLayout(),
     showTrayProviderBadge: false,
@@ -395,12 +592,20 @@ function defaultSettings() {
     volcengineAccessKeyId: '',
     volcengineSecretAccessKey: '',
     volcengineRegion: '',
+    volcengineAgentAccessKeyId: '',
+    volcengineAgentSecretAccessKey: '',
+    volcengineAgentRegion: '',
     qoderCookie: '',
     qoderSite: 'global',
+    traeAccessToken: '',
+    traeDeviceId: '',
+    zedCookie: '',
+    commandcodeCookie: '',
     kimiApiKey: '',
     kimiWebAccessToken: '',
     ollamaCookie: '',
     codexManagedAccounts: [],
+    antigravityManagedAccounts: [],
     mimoManagedAccounts: [],
     appUpdate: {
       lastCheckedAt: null,
@@ -474,6 +679,7 @@ function electronUsageConfig(errorPrefix) {
     defaultDeviceId: defaultDeviceId(),
     intervalMs: collectorIntervalMs(),
     historyIntervalMs: normalizeHistoryIntervalMs(settings.historyIntervalMs),
+    reasonixNativeSessionsEnabled: true,
     watchEnabled: collectorWatchEnabled(),
     // No watchUsePolling on purpose. The widget states no preference so the
     // shared default in resolveWatchUsePolling() governs and the widget cannot
@@ -494,10 +700,19 @@ function electronUsageConfig(errorPrefix) {
 }
 
 function electronLimitsConfig() {
+  const workbuddyEnabled = settings?.limitsEnabled !== false
+    && parseLimitProviders(settings?.limitProviders).includes('workbuddy');
+  const workbuddyDesktopSessionSupported = isSupportedWorkbuddyLocalAppPlatform();
+  const workbuddyDesktopSessionEnabled = workbuddyEnabled && workbuddyDesktopSessionSupported;
   return limitsConfigFromSettings(settings, {
     env: process.env,
+    workbuddyDesktopSessionOnly: true,
+    workbuddyDesktopSessionSupported,
+    workbuddyDesktopSessionEnabled,
+    workbuddyLocalSession: workbuddyDesktopSessionEnabled ? electronWorkbuddyLocalAuth.getSessionInfo() : {},
     defaultLimitProviders: defaultLimitProviders(),
     codexManagedAccounts: codexManagedAccountsForCollector(),
+    antigravityManagedAccounts: antigravityManagedAccountsForCollector(),
     mimoManagedAccounts: mimoManagedAccountsForCollector()
   });
 }
@@ -545,9 +760,21 @@ function persistClaudeWebCookieRenewal({ previousCookie, cookie } = {}) {
 
 function electronLimitsDeps() {
   return {
+    fetch: electronLimitsFetch(),
     claudeWebFetch: electronClaudeWebFetch,
+    workbuddyFetch: async (url, init = {}, expectedSession = null) => {
+      const result = await electronWorkbuddyLocalAuth.request(url, init, expectedSession);
+      return {
+        status: result.status,
+        ok: result.ok,
+        json: () => result.json()
+      };
+    },
     resolveConfigSnapshot: () => electronLimitsConfig(),
-    onClaudeWebCookieRenewed: persistClaudeWebCookieRenewal
+    onClaudeWebCookieRenewed: persistClaudeWebCookieRenewal,
+    onAntigravityCredentialsRenewed: persistAntigravityCredentialsRenewal,
+    onThirdPartyCredentialsRenewed: persistThirdPartyCredentialsRenewal,
+    onThirdPartyAccountKeyResolved: persistThirdPartyAccountKey
   };
 }
 
@@ -628,6 +855,34 @@ function normalizeQoderSite(value) {
 
 function currentQoderCookie() {
   return settings?.qoderCookie || qoderCookie(process.env);
+}
+
+function normalizeTraeAccessToken(value) {
+  return traeAccessToken({}, { traeAccessToken: String(value || '') });
+}
+
+function normalizeTraeDeviceId(value) {
+  return traeDeviceId({}, { traeDeviceId: String(value || '') });
+}
+
+function currentTraeAccessToken() {
+  return settings?.traeAccessToken || traeAccessToken(process.env);
+}
+
+function normalizeZedCookie(value) {
+  return zedCookie({}, { zedCookie: String(value || '') });
+}
+
+function currentZedCookie() {
+  return settings?.zedCookie || zedCookie(process.env);
+}
+
+function normalizeCommandcodeCookie(value) {
+  return commandcodeCookie({}, { commandcodeCookie: String(value || '') });
+}
+
+function currentCommandcodeCookie() {
+  return settings?.commandcodeCookie || commandcodeCookie(process.env);
 }
 
 function normalizeOllamaCookie(value) {
@@ -773,7 +1028,7 @@ function hydrateCodexManagedWorkspaceLabels() {
           description: 'Managed Codex auth',
           encoding: 'utf8'
         }));
-        const workspaces = await listCodexWorkspaces(auth, { env: process.env });
+        const workspaces = await listCodexWorkspaces(auth, electronProviderDeps({ env: process.env }));
         const workspace = workspaces.find((entry) => entry.id === account.workspaceAccountId);
         return workspace
           ? {
@@ -795,18 +1050,18 @@ function hydrateCodexManagedWorkspaceLabels() {
     let changed = false;
     const accounts = normalizeCodexManagedAccounts(settings?.codexManagedAccounts).map((account) => {
       const resolved = labels.get(account.id);
-      if (
-        !resolved
-        || account.workspaceLabel
-        || account.workspaceKind
-        || account.enabled === false
-        || account.workspaceAccountId !== resolved.workspaceAccountId
-      ) return account;
+      if (!resolved || account.enabled === false || account.workspaceAccountId !== resolved.workspaceAccountId) {
+        return account;
+      }
+      const shouldHydrateLabel = !account.workspaceLabel && !account.workspaceKind;
+      if (!shouldHydrateLabel) return account;
       changed = true;
       return {
         ...account,
-        workspaceLabel: resolved.label,
-        workspaceKind: resolved.workspaceKind,
+        ...(shouldHydrateLabel ? {
+          workspaceLabel: resolved.label,
+          workspaceKind: resolved.workspaceKind
+        } : {}),
         updatedAt: new Date().toISOString()
       };
     });
@@ -843,6 +1098,168 @@ function codexAccountsForRenderer() {
 
 function codexManagedAccountsForCollector() {
   return normalizeCodexManagedAccounts(settings?.codexManagedAccounts);
+}
+
+function normalizeAntigravityManagedAccounts(value) {
+  return antigravityOAuth.normalizeManagedAccounts(value);
+}
+
+function antigravityAccountsForRenderer() {
+  return normalizeAntigravityManagedAccounts(settings?.antigravityManagedAccounts);
+}
+
+function readAntigravityCredential(id) {
+  try {
+    return ensureCredentialStore().readAntigravityCredential(id);
+  } catch (_) {
+    return null;
+  }
+}
+
+function writeAntigravityCredential(id, credentials) {
+  try {
+    return ensureCredentialStore().writeAntigravityCredential(id, credentials);
+  } catch (_) {
+    return false;
+  }
+}
+
+function removeAntigravityCredential(id) {
+  try {
+    return ensureCredentialStore().removeAntigravityCredential(id);
+  } catch (_) {
+    return false;
+  }
+}
+
+function antigravityManagedAccountsForCollector() {
+  return antigravityOAuth.managedAccountsForCollector(
+    settings?.antigravityManagedAccounts,
+    readAntigravityCredential
+  );
+}
+
+function persistAntigravityCredentialsRenewal({ account, credentials, previous } = {}) {
+  const accountId = String(account?.id || '').trim();
+  if (!accountId || !credentials || typeof credentials !== 'object') return false;
+  const current = readAntigravityCredential(accountId);
+  if (!current || JSON.stringify(current) !== JSON.stringify(previous || {})) return false;
+  return writeAntigravityCredential(accountId, credentials);
+}
+
+async function addAntigravityManagedAccount() {
+  if (antigravityOAuthLoginController) return { ok: false, errorCode: 'loginInProgress' };
+  const controller = new AbortController();
+  antigravityOAuthLoginController = controller;
+  try {
+    const { credential, identity } = await runAntigravityOAuthLogin({
+      env: process.env,
+      fetch: electronLimitsFetch(),
+      openExternal: (url) => shell.openExternal(url),
+      signal: controller.signal,
+      logger: (message) => console.log(`[antigravity-oauth] ${message}`)
+    });
+    const accounts = normalizeAntigravityManagedAccounts(settings?.antigravityManagedAccounts);
+    const now = new Date().toISOString();
+    const existing = accounts.find((account) => account.accountEmail === identity.email);
+    const account = {
+      id: existing?.id || `antigravity-${crypto.randomUUID()}`,
+      accountKey: antigravityOAuth.accountKey(identity.email),
+      accountEmail: identity.email,
+      accountLabel: existing?.accountLabel || identity.name || '',
+      enabled: true,
+      addedAt: existing?.addedAt || now,
+      updatedAt: now
+    };
+    const previousCredential = existing ? readAntigravityCredential(existing.id) : null;
+    if (!writeAntigravityCredential(account.id, {
+      ...credential,
+      refreshToken: credential.refreshToken || previousCredential?.refreshToken || ''
+    })) {
+      return { ok: false, errorCode: 'credentialStorageUnavailable' };
+    }
+    settings.antigravityManagedAccounts = normalizeAntigravityManagedAccounts([
+      ...accounts.filter((entry) => entry.id !== account.id && entry.accountEmail !== account.accountEmail),
+      account
+    ]);
+    try {
+      saveSettings({ throwOnError: true });
+    } catch (_) {
+      if (previousCredential) writeAntigravityCredential(account.id, previousCredential);
+      else removeAntigravityCredential(account.id);
+      return { ok: false, errorCode: 'credentialStorageUnavailable' };
+    }
+    pushSettingsToRenderer();
+    sendAntigravityAccountsPush();
+    void queueLimitInvalidation({
+      provider: 'antigravity',
+      accountId: account.id,
+      accountKey: account.accountKey,
+      accountEmail: account.accountEmail,
+      sourceDetail: 'oauth'
+    }, 'account-added');
+    return { ok: true, accounts: antigravityAccountsForRenderer() };
+  } catch (error) {
+    const cancelled = controller.signal.aborted || error?.code === 'CANCELLED' || error?.name === 'AbortError';
+    return {
+      ok: false,
+      errorCode: cancelled ? 'cancelled' : error?.code || 'loginFailed',
+      error: cancelled ? '' : String(error?.message || error)
+    };
+  } finally {
+    if (antigravityOAuthLoginController === controller) antigravityOAuthLoginController = null;
+  }
+}
+
+function cancelAntigravityManagedAccountLogin() {
+  if (!antigravityOAuthLoginController) return false;
+  antigravityOAuthLoginController.abort();
+  return true;
+}
+
+async function removeAntigravityManagedAccount(id) {
+  const accountId = String(id || '').trim();
+  const accounts = normalizeAntigravityManagedAccounts(settings?.antigravityManagedAccounts);
+  const account = accounts.find((entry) => entry.id === accountId);
+  if (!account) return { ok: false, error: 'Account not found' };
+  const previousCredential = readAntigravityCredential(accountId);
+  if (!removeAntigravityCredential(accountId)) return { ok: false, error: 'Could not remove stored credential' };
+  settings.antigravityManagedAccounts = accounts.filter((entry) => entry.id !== accountId);
+  try {
+    saveSettings({ throwOnError: true });
+  } catch (_) {
+    if (previousCredential) writeAntigravityCredential(accountId, previousCredential);
+    return { ok: false, error: 'Could not persist account removal' };
+  }
+  pushSettingsToRenderer();
+  sendAntigravityAccountsPush();
+  void queueLimitInvalidation({ provider: 'antigravity', accountId, accountKey: account.accountKey }, 'account-removed', {
+    clear: true,
+    refresh: false
+  });
+  return { ok: true, accounts: antigravityAccountsForRenderer() };
+}
+
+function setAntigravityManagedAccountEnabled(id, enabled) {
+  const accountId = String(id || '').trim();
+  const accounts = normalizeAntigravityManagedAccounts(settings?.antigravityManagedAccounts);
+  const account = accounts.find((entry) => entry.id === accountId);
+  if (!account) return { ok: false, error: 'Account not found' };
+  account.enabled = Boolean(enabled);
+  account.updatedAt = new Date().toISOString();
+  settings.antigravityManagedAccounts = accounts;
+  try {
+    saveSettings({ throwOnError: true });
+  } catch (_) {
+    return { ok: false, error: 'Could not persist account state' };
+  }
+  pushSettingsToRenderer();
+  sendAntigravityAccountsPush();
+  void queueLimitInvalidation({ provider: 'antigravity', accountId, accountKey: account.accountKey }, 'account-state', {
+    clear: !account.enabled,
+    refresh: account.enabled
+  });
+  return { ok: true, accounts: antigravityAccountsForRenderer() };
 }
 
 function normalizeMimoManagedAccounts(value) {
@@ -917,7 +1334,7 @@ async function addMimoManagedAccount(cookieValue) {
   const accounts = normalizeMimoManagedAccounts(settings?.mimoManagedAccounts);
   const result = createMimoManagedAccount(cookieValue, accounts);
   if (!result.ok) return result;
-  const [validation] = await fetchMimoLimits({ mimoManagedAccounts: [result.account] });
+  const [validation] = await fetchMimoLimits({ mimoManagedAccounts: [result.account] }, electronProviderDeps());
   if (validation?.status !== 'ok') {
     const errorCode = validation?.status === 'unauthorized'
       ? 'invalidCookie'
@@ -1145,14 +1562,14 @@ async function rollbackCodexManagedHome(homePath, backupHomePath, movedToFinal) 
   if (backupHomePath) await fs.promises.rename(backupHomePath, homePath);
 }
 
-async function resolveCodexWorkspaceAfterLogin(auth, homePath, options = {}) {
+async function resolveCodexWorkspaceAfterLogin(auth, _homePath, options = {}) {
   const initialIdentity = codexAuthIdentity(auth);
   let workspaces;
   try {
-    workspaces = await listCodexWorkspaces(auth, {
+    workspaces = await listCodexWorkspaces(auth, electronProviderDeps({
       env: process.env,
       signal: options.signal
-    });
+    }));
   } catch (error) {
     if (options.signal?.aborted) return { cancelled: true };
     console.warn('Could not list Codex workspaces after sign-in:', error?.message || error);
@@ -1179,15 +1596,14 @@ async function resolveCodexWorkspaceAfterLogin(auth, homePath, options = {}) {
   }
   if (!selected) return { auth, identity: initialIdentity };
 
-  const selectedAuth = authWithSelectedCodexWorkspace(auth, selected.id);
-  await writeCodexAuthFile(
-    path.join(homePath, 'auth.json'),
-    `${JSON.stringify(selectedAuth, null, 2)}\n`
-  );
+  const workspaceAccountId = normalizeWorkspaceId(selected.id);
   return {
-    auth: selectedAuth,
+    auth,
     identity: {
-      ...codexAuthIdentity(selectedAuth),
+      ...initialIdentity,
+      providerAccountId: workspaceAccountId,
+      workspaceAccountId,
+      accountKey: codexAccountKey(initialIdentity.email, workspaceAccountId),
       workspaceLabel: selected.label,
       workspaceKind: selected.workspaceKind
     }
@@ -1349,6 +1765,17 @@ async function switchCodexSystemAccount(id) {
   if (!hasCodexIdentity(targetMaterial.identity)) {
     return { ok: false, error: 'Could not identify the selected Codex account credentials.' };
   }
+  let selectedMaterial;
+  try {
+    selectedMaterial = codexAuthMaterialForWorkspace(targetMaterial, account.workspaceAccountId);
+  } catch (error) {
+    return { ok: false, error: error?.message || 'Could not prepare the selected Codex workspace.' };
+  }
+  const targetIdentity = {
+    ...selectedMaterial.identity,
+    workspaceLabel: account.workspaceLabel,
+    workspaceKind: account.workspaceKind
+  };
 
   const previousAccounts = normalizeCodexManagedAccounts(settings.codexManagedAccounts);
   const liveAuthPath = liveCodexAuthPath(process.env);
@@ -1360,16 +1787,16 @@ async function switchCodexSystemAccount(id) {
   }
   let preservedLiveAccount = null;
   try {
-    preservedLiveAccount = await preserveLiveCodexAuthAsManagedAccount(targetMaterial.identity);
-    await writeCodexAuthFile(liveAuthPath, targetMaterial.data);
+    preservedLiveAccount = await preserveLiveCodexAuthAsManagedAccount(targetIdentity);
+    await writeCodexAuthFile(liveAuthPath, selectedMaterial.data);
     const refreshedAccounts = normalizeCodexManagedAccounts(settings.codexManagedAccounts);
     const refreshed = refreshedAccounts.find((entry) => entry.id === account.id) || account;
-    commitCodexManagedAccount(targetMaterial.identity, refreshed.homePath, refreshed, {
+    commitCodexManagedAccount(targetIdentity, refreshed.homePath, refreshed, {
       enabled: refreshed.enabled !== false,
       restart: false
     });
     void queueLimitInvalidation({ provider: 'codex' }, 'system-account-switch');
-    const activeAccountId = codexAccountId(targetMaterial.identity, refreshed);
+    const activeAccountId = codexAccountId(targetIdentity, refreshed);
     const accountsForRenderer = codexAccountsForRenderer();
     return {
       ok: true,
@@ -1584,6 +2011,11 @@ function sendFloatingBubbleState() {
   try { mainWindow.webContents.send('floatingBubble:state', floatingBubblePayload()); } catch (_) {}
 }
 
+function sendMainWindowVisibility(win = mainWindow) {
+  if (!win || win !== mainWindow || win.isDestroyed() || win.webContents.isDestroyed()) return;
+  win.webContents.send('window:visibility', win.isVisible() && !win.isMinimized());
+}
+
 function stopFloatingBubbleAutoCollapseTimer() {
   if (floatingBubbleAutoCollapseTimer) clearTimeout(floatingBubbleAutoCollapseTimer);
   floatingBubbleAutoCollapseTimer = null;
@@ -1608,8 +2040,9 @@ function applyCollapsedFloatingBubbleLimits(bounds) {
     mainWindow.setMaximumSize(bounds?.width || FLOATING_BUBBLE_HANDLE_WIDTH, bounds?.height || FLOATING_BUBBLE_HANDLE_HEIGHT);
   }
   if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(false);
-  mainWindow.setAlwaysOnTop(true, process.platform === 'win32' ? 'screen-saver' : 'floating');
+  mainWindow.setAlwaysOnTop(true, floatingAlwaysOnTopLevel());
   if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(true);
+  syncTaskbarZOrder();
 }
 
 function displayForBounds(bounds) {
@@ -1906,6 +2339,7 @@ function migrateLegacyMimoCredentialFiles(accounts) {
 
 function readSettings() {
   settingsPath = path.join(app.getPath('userData'), 'settings.json');
+  const settingsFileExisted = fs.existsSync(settingsPath);
   try {
     const defaults = defaultSettings();
     let saved = {};
@@ -1924,6 +2358,11 @@ function readSettings() {
     const storedCredentials = loadCredentialSettings(saved);
     if (!saved.secret && defaults.secret) delete saved.secret;
     const merged = { ...defaults, ...saved, ...storedCredentials };
+    // A missing settings file is the only reliable fresh-install signal: a
+    // missing limitProviders field also occurs when an existing installation
+    // upgrades, where changing the user's effective defaults would be wrong.
+    initialLimitProvidersPending = !settingsFileExisted
+      && process.env.TOKEN_MONITOR_LIMIT_PROVIDERS === undefined;
     // Migrate older configs that predate hubMode: infer from hubUrl.
     if (saved.hubMode === undefined) {
       merged.hubMode = (saved.hubUrl && String(saved.hubUrl).trim()) ? 'client' : 'local';
@@ -1957,6 +2396,10 @@ function readSettings() {
     }
     merged.showHomeLimitBars = parseBoolean(merged.showHomeLimitBars, false);
     merged.showHomeLimitProviderNames = parseBoolean(merged.showHomeLimitProviderNames, false);
+    merged.codexResetForecastEnabled = parseBoolean(merged.codexResetForecastEnabled, false);
+    merged.showCodexAdditionalLimits = parseBoolean(merged.showCodexAdditionalLimits, true);
+    merged.opencodeLocalLimitsEnabled = parseBoolean(merged.opencodeLocalLimitsEnabled, false);
+    delete merged.workbuddyLocalAppEnabled;
     merged.windowMaximized = parseBoolean(merged.windowMaximized, false);
     merged.automaticAppUpdates = parseBoolean(merged.automaticAppUpdates, false);
     if (saved.homeLimitProviderOrder !== undefined) {
@@ -1966,6 +2409,7 @@ function readSettings() {
       merged.hiddenHomeLimitProviders = normalizeHiddenLimitProviders(saved.hiddenHomeLimitProviders);
     }
     merged.homeLimitAccountCount = normalizeHomeLimitAccountCount(merged.homeLimitAccountCount);
+    merged.periodMonthMode = normalizePeriodMonthMode(merged.periodMonthMode);
     if (saved.historyEnabled !== undefined) {
       merged.historyEnabled = parseBoolean(saved.historyEnabled, false);
     }
@@ -1982,9 +2426,12 @@ function readSettings() {
     merged.collectionIntervalMs = normalizeCollectionIntervalMs(merged.collectionIntervalMs);
     merged.syncUploadIntervalMs = normalizeSyncUploadIntervalMs(merged.syncUploadIntervalMs);
     merged.heatmapMetric = normalizeHeatmapMetric(merged.heatmapMetric);
+    merged.modelRankingMetric = normalizeRankingMetric(merged.modelRankingMetric);
     merged.homeActiveDaysWindow = normalizeHomeActiveDaysWindow(merged.homeActiveDaysWindow);
     merged.reduceMotion = motionPreferenceApi.normalize(merged.reduceMotion);
     merged.compactTokenUnits = normalizeCompactTokenUnits(merged.compactTokenUnits);
+    merged.interfaceFontFamily = fontSettingsApi.normalizeFontFamily(merged.interfaceFontFamily);
+    merged.displayFontFamily = fontSettingsApi.normalizeFontFamily(merged.displayFontFamily);
     merged.tokenRateMode = normalizeTokenRateMode(merged.tokenRateMode);
     if (saved.serviceProviderDisplayOrder !== undefined) {
       merged.serviceProviderDisplayOrder = String(saved.serviceProviderDisplayOrder || '');
@@ -1996,7 +2443,11 @@ function readSettings() {
       merged.serviceStatusRefreshMs = normalizeServiceStatusRefreshMs(saved.serviceStatusRefreshMs);
     }
     merged.codexManagedAccounts = normalizeCodexManagedAccounts(merged.codexManagedAccounts);
+    merged.antigravityManagedAccounts = normalizeAntigravityManagedAccounts(merged.antigravityManagedAccounts);
     merged.mimoManagedAccounts = normalizeMimoManagedAccounts(merged.mimoManagedAccounts);
+    if (saved.keepAboveTaskbar !== undefined) {
+      merged.keepAboveTaskbar = parseBoolean(saved.keepAboveTaskbar, false);
+    }
     if (saved.windowBehavior === undefined && saved.alwaysOnTop !== undefined) {
       merged.windowBehavior = saved.alwaysOnTop ? 'floating' : 'normal';
     }
@@ -2007,8 +2458,11 @@ function readSettings() {
     merged.language = normalizeLanguageSetting(merged.language);
     merged.currency = normalizeCurrency(merged.currency);
     merged.currencyRates = normalizeCurrencyOverrides(merged.currencyRates);
+    merged.cursorDisabledAccountIds = normalizeCursorDisabledAccountIds(merged.cursorDisabledAccountIds);
+    merged.cursorManualAccountIds = normalizeCursorAccountIds(merged.cursorManualAccountIds);
     merged.hubHostPort = normalizeHubPort(merged.hubHostPort);
     merged.hubHostSecret = typeof merged.hubHostSecret === 'string' ? merged.hubHostSecret : '';
+    delete merged.workbuddyEndpoint;
     merged.floatingBubbleEnabled = parseBoolean(merged.floatingBubbleEnabled ?? merged.edgeDrawerEnabled, false);
     merged.archivedClientUsage = normalizeArchivedClientUsage(merged.archivedClientUsage);
     delete merged.edgeDrawerEnabled;
@@ -2047,6 +2501,7 @@ function saveSettings(options = {}) {
       previousSettings
     });
     persistedSettingsSnapshot = cloneSettingsSnapshot(settings);
+    refreshTrayContextMenu();
     return true;
   } catch (error) {
     settings = previousSettings;
@@ -2054,6 +2509,19 @@ function saveSettings(options = {}) {
     if (options.throwOnError) throw error;
     return false;
   }
+}
+
+function seedInitialLimitProviders(summary) {
+  return applyInitialLimitProviderSeed(initialLimitProvidersPending, summary, {
+    settings,
+    saveSettings,
+    onPersisted() {
+      // Consume the one-shot seed before reconfiguration can publish again.
+      initialLimitProvidersPending = false;
+      deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
+      pushSettingsToRenderer();
+    }
+  });
 }
 
 function loginItemEnabledHere() {
@@ -2097,10 +2565,14 @@ function removedTrackedClients(previousClients, nextClients) {
 }
 
 function localArchiveSourceDevice() {
-  const deviceId = settings?.deviceId || defaultDeviceId();
-  if (lastCollectedDevice?.deviceId === deviceId) return lastCollectedDevice;
-  if (localDevice?.deviceId === deviceId) return localDevice;
-  return (latestStats?.devices || []).find((device) => device?.deviceId === deviceId) || null;
+  return selectLocalDeviceRecord({
+    deviceId: settings?.deviceId || defaultDeviceId(),
+    externalAgentActive: isExternalAgentActive(),
+    lastCollectedDevice,
+    localDevice,
+    latestHubStats: currentHubStatsCache(),
+    latestStats
+  });
 }
 
 function updateArchivedClientUsage(previousClients, nextClients) {
@@ -2124,36 +2596,56 @@ function ensureSessionUsageArchiveLoaded() {
 }
 
 function updateSessionUsageArchive(summary, now) {
+  const startedAt = Date.now();
+  const finish = (failureCode = null) => {
+    lastSessionUsageArchiveUpdate = {
+      at: new Date().toISOString(),
+      durationMs: Math.max(0, Date.now() - startedAt),
+      failureCode
+    };
+  };
   const previous = ensureSessionUsageArchiveLoaded();
   const next = captureSessionUsageArchive(previous, summary, now);
-  if (JSON.stringify(next) === JSON.stringify(previous)) return previous;
+  if (JSON.stringify(next) === JSON.stringify(previous)) {
+    finish();
+    return previous;
+  }
   try {
     writeSessionUsageArchive(next);
     sessionUsageArchive = next;
   } catch (error) {
+    finish('archive-write-failed');
+    diagnosticJournal.record({ subsystem: 'storage', code: 'storage-archive-update-failed' });
     console.log(`[session-archive] write failed: ${error.message}`);
+    return next;
   }
+  finish();
   return next;
 }
 
-function summaryWithArchivedClientUsage(summary) {
-  const now = sessionUsageArchiveDate(summary);
+// Read-only projection of both archives onto a summary. Un-tracked clients and
+// retained sessions add to the period totals, not just to the breakdowns, so
+// anything rendered without this reads low. Takes the session archive as an
+// argument because capturing into it is a separate decision, see below.
+function summaryWithArchivesApplied(summary, sessionArchive, now) {
   const withArchivedClients = applyArchivedClientUsage(summary, settings?.archivedClientUsage, {
     activeClients: settings?.clients,
     now
   });
-  let visibleSummary = withArchivedClients;
-  if (settings?.sessionUsageArchiveEnabled === false) {
-    return settings?.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);
-  }
+  const visibleSummary = settings?.sessionUsageArchiveEnabled === false
+    ? withArchivedClients
+    : applySessionUsageArchive(withArchivedClients, sessionArchive, { now });
+  return settings?.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);
+}
+
+function summaryWithArchivedClientUsage(summary) {
+  const now = sessionUsageArchiveDate(summary);
+  if (settings?.sessionUsageArchiveEnabled === false) return summaryWithArchivesApplied(summary, null, now);
   if (isExternalAgentActive()) {
     sessionUsageArchive = null;
-    visibleSummary = applySessionUsageArchive(withArchivedClients, ensureSessionUsageArchiveLoaded(), { now });
-  } else {
-    const sessionArchive = updateSessionUsageArchive(summary, now);
-    visibleSummary = applySessionUsageArchive(withArchivedClients, sessionArchive, { now });
+    return summaryWithArchivesApplied(summary, ensureSessionUsageArchiveLoaded(), now);
   }
-  return settings?.projectsEnabled === false ? visibleSummary : applyProjectRollups(visibleSummary);
+  return summaryWithArchivesApplied(summary, updateSessionUsageArchive(summary, now), now);
 }
 
 function applyMacActivationPolicy(state = {}) {
@@ -2187,7 +2679,15 @@ function applyMacSpaceBehavior(trayMode = Boolean(settings?.trayMode)) {
     }
   } else {
     if (typeof mainWindow.setVisibleOnAllWorkspaces === 'function') {
-      mainWindow.setVisibleOnAllWorkspaces(false);
+      // skipTransformProcessType is not just a flicker optimisation here. Left
+      // at its default, Electron transforms the process back to a foreground
+      // app on this call, which re-shows the Dock icon and silently undoes the
+      // accessory policy hideAppIcon depends on. The invariant that makes
+      // skipping safe is that applyMacActivationPolicy() is the only thing that
+      // decides the process type and has already run on every path into here —
+      // enumerating those paths is what rots, so anything new that reaches this
+      // function has to apply the policy first rather than be added to a list.
+      mainWindow.setVisibleOnAllWorkspaces(false, { skipTransformProcessType: true });
     }
     if (typeof mainWindow.setHiddenInMissionControl === 'function') {
       mainWindow.setHiddenInMissionControl(false);
@@ -2198,6 +2698,44 @@ function applyMacSpaceBehavior(trayMode = Boolean(settings?.trayMode)) {
   }
 }
 
+// Windows re-raises its taskbar over an always-on-top widget that overlaps it
+// and gives us no event for the common case, so keeping the widget above it
+// costs a timer and can briefly flicker during some app switches. That price
+// only makes sense for someone who deliberately parked the widget on the
+// taskbar, which is why it is opt-in. windowsTaskbarZOrder.js explains the
+// mechanics. Everything that can change whether the widget still overlaps the
+// taskbar — or is still on top, or still visible — calls this, and the keeper
+// decides for itself.
+let taskbarZOrderKeeper = null;
+
+function stopTaskbarZOrderKeeper() {
+  if (taskbarZOrderKeeper) taskbarZOrderKeeper.stop();
+}
+
+function syncTaskbarZOrder() {
+  if (!taskbarZOrderEnabled(settings)) {
+    stopTaskbarZOrderKeeper();
+    return;
+  }
+  if (!taskbarZOrderKeeper) {
+    taskbarZOrderKeeper = createTaskbarZOrderKeeper({
+      screen,
+      subscribeForeground: subscribeForegroundChange,
+      log: process.env.TOKEN_MONITOR_TASKBAR_ZORDER_DEBUG === '1'
+        ? (message) => console.log(`[taskbar-zorder ${Date.now() % 100000}] ${message}`)
+        : null
+    });
+  }
+  taskbarZOrderKeeper.sync(mainWindow);
+}
+
+// Losing activation to the taskbar is the one transition Windows raises it on
+// that reaches us as an event, so it gets the fast path.
+function nudgeTaskbarZOrder() {
+  if (!taskbarZOrderEnabled(settings) || !taskbarZOrderKeeper) return;
+  taskbarZOrderKeeper.nudge(mainWindow);
+}
+
 function applyWindowSettings() {
   if (!mainWindow) return;
   if (floatingBubbleState.collapsed) {
@@ -2205,37 +2743,34 @@ function applyWindowSettings() {
     return;
   }
   const behavior = describeWindowBehavior(settings);
-  mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, 'floating');
+  mainWindow.setAlwaysOnTop(behavior.alwaysOnTop, floatingAlwaysOnTopLevel());
   if (typeof mainWindow.setMovable === 'function') mainWindow.setMovable(behavior.draggable);
   if (typeof mainWindow.setResizable === 'function') mainWindow.setResizable(behavior.resizable);
   if (typeof mainWindow.setIgnoreMouseEvents === 'function') {
     mainWindow.setIgnoreMouseEvents(behavior.mousePassthrough);
   }
   if (typeof mainWindow.setFocusable === 'function') mainWindow.setFocusable(behavior.focusable);
-  if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(Boolean(settings?.trayMode));
+  if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
   if (!behavior.focusable && typeof mainWindow.blur === 'function') mainWindow.blur();
+  syncTaskbarZOrder();
 }
 
 function nativeBlurEnabled(source = settings) {
   return floatingBubbleNativeGlassEnabled(source);
 }
 
-function keepNativeBlurActive() {
-  if (!mainWindow) return;
-  if (!nativeBlurEnabled()) return;
-  if (process.platform === 'darwin' && typeof mainWindow.setVisualEffectState === 'function') {
-    mainWindow.setVisualEffectState('active');
-  }
-}
-
 function applyNativeMaterial(source = settings) {
-  if (!mainWindow) return;
   const enabled = nativeBlurEnabled(source);
-  if (process.platform === 'darwin' && typeof mainWindow.setVibrancy === 'function') {
-    mainWindow.setVibrancy(enabled ? 'hud' : null);
-    if (typeof mainWindow.setVisualEffectState === 'function') {
-      mainWindow.setVisualEffectState(enabled ? 'active' : 'inactive');
-    }
+  if (mainWindow && !mainWindow.isDestroyed() && mainWindowNativeBlurEnabled !== enabled) {
+    mainWindowNativeBlurEnabled = enabled;
+    syncNativeMaterialVisibility(mainWindow, enabled);
+  }
+  // This also runs for every appearance slider preview and floating-bubble
+  // transition, so re-applying an unchanged material would rebuild its native
+  // effect view for nothing.
+  if (dashboardWindow && !dashboardWindow.isDestroyed() && dashboardWindowNativeBlurEnabled !== enabled) {
+    dashboardWindowNativeBlurEnabled = enabled;
+    syncNativeMaterialVisibility(dashboardWindow, enabled);
   }
   // Windows: backgroundMaterial is locked in at window creation. setBackgroundMaterial('none')
   // does not restore layered-window transparency once DWM SystemBackdrop has been engaged,
@@ -2243,14 +2778,29 @@ function applyNativeMaterial(source = settings) {
 }
 
 function withHistoryPreview(stats, devices) {
-  const history = settings?.historyEnabled === false ? aggregateHistory([]) : aggregateHistory(devices);
+  const historyDevices = settings?.historyEnabled === false ? [] : devices;
+  const history = aggregateHistory(historyDevices);
   stats.historyPreview = historyPreview(history);
   stats.historyRevision = historyRevision(history);
+  stats.deviceHistoryRevision = deviceHistoryRevision(historyDevices);
   return stats;
 }
 
 let mode = 'idle';
 let deviceRuntimeHandle = null;
+const USAGE_RECONFIGURE_SETTLE_MS = 750;
+const USAGE_RECONFIGURE_RETRY_DELAYS_MS = Object.freeze([1000, 3000, 10_000]);
+const usageRuntimeReconciler = createLatestWinsReconciler({
+  delayMs: USAGE_RECONFIGURE_SETTLE_MS,
+  retryDelaysMs: USAGE_RECONFIGURE_RETRY_DELAYS_MS,
+  apply: () => applyUsageRuntimeForMode(),
+  onError: (error) => console.log(`[usage-runtime] settings reconciliation failed: ${error.message}`),
+  onExhausted: ({ attempts }) => recordDiagnosticEvent({
+    subsystem: 'usage-runtime',
+    code: 'usage-reconfigure-exhausted',
+    attempts
+  })
+});
 let localDevice = null;
 let localStats = null;
 let sseAbortController = null;
@@ -2259,11 +2809,28 @@ let streamConnected = false;
 let streamFailure = null;
 let lastCollectedDevice = null;
 let latestHubStats = null;
+let latestHubStatsReceivedAt = null;
+let latestHubStatsSource = 'none';
+let latestHubStatsGeneration = null;
+let latestHubStatsIdentity = null;
+let hubModeGeneration = 0;
 let tray = null;
 let latestStats = null;
+let macWidgetSnapshotController = null;
+let macWidgetDemand = null;
+let macWidgetPublicationReady = false;
+let cachedMacWidgetConfiguration;
 let trayRefreshInFlight = false;
 let trayCodexActiveAccountId = '';
 let trayCodexPendingAccountId = '';
+
+function electronPresentationStats(stats) {
+  return projectLimitStatsForDisplay(stats, {
+    localDeviceId: settings?.deviceId,
+    syncActive: mode === 'sync' || Boolean(String(settings?.hubUrl || '').trim()),
+    opencodeLocalLimitsEnabled: settings?.opencodeLocalLimitsEnabled === true
+  });
+}
 let trayCodexPendingSince = 0;
 let trayCodexSwitchInFlight = false;
 const DEFAULT_EXPORT_INTERVAL_MS = 60 * 1000;
@@ -2293,6 +2860,121 @@ let embeddedHubUnsub = null;
 let modeQueue = Promise.resolve();
 const pendingLimitInvalidations = new Map();
 const pendingUsageClientRefreshes = new Map();
+
+function hubModeRequestIsCurrent(generation, expectedMode, expectedIdentity = null) {
+  return generation === hubModeGeneration
+    && settings?.hubMode === expectedMode
+    && (expectedIdentity === null || currentHubStatsIdentity(expectedMode) === expectedIdentity);
+}
+
+function currentHubStatsIdentity(expectedMode = settings?.hubMode) {
+  const { url } = effectiveHubConfig();
+  return `${String(expectedMode || 'none')}|${String(url || 'none').replace(/\/$/, '')}`;
+}
+
+function currentHubStatsCache() {
+  const hubMode = settings?.hubMode || 'local';
+  const expectedSource = hubMode === 'host'
+    ? 'host'
+    : hubMode === 'client'
+      ? 'client'
+      : 'none';
+  if (!latestHubStats
+    || latestHubStatsSource !== expectedSource
+    || latestHubStatsGeneration !== hubModeGeneration
+    || latestHubStatsIdentity !== currentHubStatsIdentity(hubMode)) {
+    return null;
+  }
+  return latestHubStats;
+}
+
+function clearLatestHubStatsCache() {
+  latestHubStats = null;
+  latestHubStatsReceivedAt = null;
+  latestHubStatsSource = 'none';
+  latestHubStatsGeneration = null;
+  latestHubStatsIdentity = null;
+}
+
+function setLatestHubStatsCache(stats, source, generation, identity) {
+  latestHubStats = stats;
+  latestHubStatsReceivedAt = new Date().toISOString();
+  latestHubStatsSource = source;
+  latestHubStatsGeneration = generation;
+  latestHubStatsIdentity = identity;
+}
+
+const diagnosticSnapshotBuilder = createDiagnosticSnapshotBuilder({
+  getSettings: () => settings,
+  getMode: () => mode,
+  getEffectiveHubConfig: effectiveHubConfig,
+  getExternalAgentActive: isExternalAgentActive,
+  getDeviceRuntime: () => deviceRuntimeHandle,
+  getEmbeddedHub: () => embeddedHub,
+  getStreamState: () => ({ connected: streamConnected, failure: streamFailure }),
+  getLatestHubStats: () => latestHubStats,
+  getLatestHubStatsReceivedAt: () => latestHubStatsReceivedAt,
+  getLatestHubStatsSource: () => latestHubStatsSource,
+  getLatestHubStatsGeneration: () => latestHubStatsGeneration,
+  getLatestHubStatsIdentity: () => latestHubStatsIdentity,
+  getHubModeGeneration: () => hubModeGeneration,
+  getCurrentHubStatsIdentity: (hubMode) => currentHubStatsIdentity(hubMode),
+  getLocalRecord: localArchiveSourceDevice,
+  getTokscaleStatus,
+  getConfiguration: () => diagnosticConfigurationFromSettings(settings || {}, {
+    usage: {
+      agentVersion: appVersion(),
+      agentRuntime: 'electron-widget',
+      commandTimeoutMs: 120 * 1000,
+      defaultDeviceId: defaultDeviceId(),
+      intervalMs: collectorIntervalMs(),
+      historyIntervalMs: normalizeHistoryIntervalMs(settings?.historyIntervalMs)
+    },
+    limits: {
+      env: process.env,
+      defaultLimitProviders: defaultLimitProviders()
+    },
+    syncUploadIntervalMs: syncUploadIntervalMs()
+  }),
+  getJournalSnapshot: () => diagnosticJournal.getSnapshot(),
+  getArchiveState: () => {
+    const enabled = settings?.sessionUsageArchiveEnabled !== false;
+    const loaded = sessionUsageArchive !== null;
+    return {
+      enabled,
+      loaded,
+      sessionCount: loaded ? Object.keys(sessionUsageArchive?.sessions || {}).length : null,
+      countSource: loaded ? 'loaded-memory' : enabled ? 'not-loaded' : 'not-enabled',
+      lastUpdate: lastSessionUsageArchiveUpdate
+    };
+  },
+  getAppVersion: appVersion,
+  getDefaultDeviceId: defaultDeviceId,
+  canRefreshUsageRuntime,
+  getAppState: () => ({
+    packaged: app.isPackaged,
+    preferredLanguages: typeof app.getPreferredSystemLanguages === 'function'
+      ? app.getPreferredSystemLanguages()
+      : [app.getLocale?.() || 'en'],
+    locale: app.getLocale?.() || 'en'
+  })
+});
+
+const diagnosticReportGenerator = createDiagnosticReportGenerator({
+  getAppMetrics: () => app.getAppMetrics(),
+  getSystemMemory: () => ({ total: os.totalmem(), free: os.freemem() }),
+  privateMemorySupported: process.platform === 'win32',
+  getSnapshot: ({ generatedAt }) => diagnosticSnapshotBuilder.build(generatedAt),
+  getArchiveFileStat: async () => {
+    if (settings?.sessionUsageArchiveEnabled === false) return { ok: false, code: 'archive-not-enabled' };
+    try {
+      const stat = await fs.promises.stat(sessionUsageArchivePath());
+      return { ok: true, stat };
+    } catch (error) {
+      return { ok: false, code: error?.code === 'ENOENT' ? 'archive-not-present' : 'archive-stat-failed' };
+    }
+  }
+});
 
 function limitInvalidationKey(scope) {
   const provider = String(scope?.provider || '').trim().toLowerCase();
@@ -2421,6 +3103,12 @@ function getHubInfo() {
     error: embeddedHubError,
     lanAddresses: lanIpv4Addresses()
   };
+}
+
+async function getHubBuildStatus() {
+  if (settings?.hubMode !== 'client') return { status: 'notConfigured', runtime: '', hubUrl: '' };
+  const hubUrl = String(settings.hubUrl || '').trim();
+  return probeHubBuild(hubUrl);
 }
 
 async function startEmbeddedHub() {
@@ -3016,14 +3704,19 @@ async function saveSubscriptions(list, base) {
   return settingsForRenderer();
 }
 
-function stopSyncCollector() {
-  if (deviceRuntimeHandle) { try { deviceRuntimeHandle.stop(); } catch (_) {} }
+// `options` is forwarded verbatim to the runtime; the quit path passes
+// `skipCloseWatchers` (see stopAll).
+function stopSyncCollector(options = {}) {
+  usageRuntimeReconciler.cancel();
+  usageRuntimeReconciler.setActiveKey(null);
+  if (deviceRuntimeHandle) { try { deviceRuntimeHandle.stop(options); } catch (_) {} }
   deviceRuntimeHandle = null;
 }
 
 function startSyncCollector() {
   stopSyncCollector();
   if (!effectiveHubConfig().url) return;
+  const widgetProducerOwner = captureMacWidgetProducerOwner();
   const syncUploadScheduler = createSyncUploadScheduler({
     intervalMs: syncUploadIntervalMs(),
     upload: postToHub,
@@ -3031,6 +3724,7 @@ function startSyncCollector() {
   });
   const sink = {
     async enqueue(summary, revision) {
+      seedInitialLimitProviders(summary);
       if (isExternalAgentActive()) { sessionUsageArchive = null; return; }
       const visibleSummary = {
         ...summary,
@@ -3040,24 +3734,27 @@ function startSyncCollector() {
       const displayStats = composeLocalSyncStats(latestHubStats, lastCollectedDevice);
       if (displayStats) {
         updateDiscordRpcDisplay(displayStats);
-        sendPush({ event: 'stats', data: { type: 'stats', reason: 'local', stats: displayStats, at: new Date().toISOString() } });
+        sendPush({ event: 'stats', data: { type: 'stats', reason: 'local', stats: displayStats, at: new Date().toISOString() } }, { widgetProducerOwner });
       }
       await syncUploadScheduler.enqueue(visibleSummary, revision);
     },
     flush: () => syncUploadScheduler.flush(),
     stop: () => syncUploadScheduler.stop()
   };
+  const usageOptions = electronUsageConfig('sync-collector');
   deviceRuntimeHandle = createDeviceRuntime({
     envelope: electronDeviceEnvelope(),
     initialLimits: lastCollectedDevice?.limits,
     limitsOptions: electronLimitsConfig(),
     transformUsage: summaryWithArchivedClientUsage,
-    usageOptions: electronUsageConfig('sync-collector'),
+    usageOptions,
     sink,
+    onDiagnosticEvent: recordDiagnosticEvent,
     onError: (error, reason) => console.log(`[sync-collector] ${reason}: ${error.message}`)
   }, {
     limitsDeps: electronLimitsDeps()
   });
+  usageRuntimeReconciler.setActiveKey(usageConfigFingerprint(usageOptions));
   drainPendingRuntimeActions(deviceRuntimeHandle);
 }
 
@@ -3068,6 +3765,7 @@ function startHostCollector() {
   stopSyncCollector();
   const sink = {
     enqueue(summary) {
+      seedInitialLimitProviders(summary);
       if (isExternalAgentActive()) { sessionUsageArchive = null; return; }
       const visibleSummary = summary;
       lastCollectedDevice = { ...visibleSummary, receivedAt: new Date().toISOString() };
@@ -3091,17 +3789,20 @@ function startHostCollector() {
       }
     }
   };
+  const usageOptions = electronUsageConfig('host-collector');
   deviceRuntimeHandle = createDeviceRuntime({
     envelope: electronDeviceEnvelope(),
     initialLimits: lastCollectedDevice?.limits,
     limitsOptions: electronLimitsConfig(),
     transformUsage: summaryWithArchivedClientUsage,
-    usageOptions: electronUsageConfig('host-collector'),
+    usageOptions,
     sink,
+    onDiagnosticEvent: recordDiagnosticEvent,
     onError: (error, reason) => console.log(`[host-collector] ${reason}: ${error.message}`)
   }, {
     limitsDeps: electronLimitsDeps()
   });
+  usageRuntimeReconciler.setActiveKey(usageConfigFingerprint(usageOptions));
   drainPendingRuntimeActions(deviceRuntimeHandle);
 }
 
@@ -3113,14 +3814,19 @@ function stopHostStats() {
 function startHostStats() {
   stopHostStats();
   if (!embeddedHub) return;
+  const generation = hubModeGeneration;
+  const widgetProducerOwner = captureMacWidgetProducerOwner();
+  const cacheIdentity = currentHubStatsIdentity('host');
   // Host mode presents the same multi-device hub aggregate as connecting to a
   // remote hub, so it reuses the renderer's 'sync' status path (Live / synced
   // data). The in-process vs loopback distinction is internal to fetchStats.
   mode = 'sync';
   sendStatus(true);
   const emit = (stats, reason = 'hub') => {
+    if (!hubModeRequestIsCurrent(generation, 'host', cacheIdentity)) return;
+    setLatestHubStatsCache(stats, 'host', generation, cacheIdentity);
     updateDiscordRpcDisplay(stats);
-    sendPush({ event: 'stats', data: { type: 'stats', reason, stats, at: new Date().toISOString() } });
+    sendPush({ event: 'stats', data: { type: 'stats', reason, stats, at: new Date().toISOString() } }, { widgetProducerOwner });
   };
   embeddedHubUnsub = embeddedHub.hub.onStats((stats, reason) => emit(stats, reason || 'hub'));
   // Prime the renderer with the current snapshot so it isn't blank until the
@@ -3135,6 +3841,11 @@ function startHostStats() {
 // being redeployed to preserve these fields.
 function injectLocalDeviceStatus(stats) {
   if (!stats || !Array.isArray(stats.devices)) return stats;
+  attachLocalPresentationNativeViews(stats, {
+    lastCollectedDevice,
+    seededLocalDevice: localDevice,
+    mode
+  });
   if (lastCollectedDevice) {
     const device = stats.devices.find((entry) => entry.deviceId === lastCollectedDevice.deviceId);
     if (device) {
@@ -3159,21 +3870,255 @@ function injectLocalDeviceStatus(stats) {
   return stats;
 }
 
-function sendPush(payload) {
+function macWidgetConfiguration() {
+  if (!macWidgetRuntimeSupported()) return null;
+  if (cachedMacWidgetConfiguration !== undefined) return cachedMacWidgetConfiguration;
+
+  let appGroup = String(process.env.TOKEN_MONITOR_APP_GROUP || '').trim();
+  let urlScheme = String(process.env.TOKEN_MONITOR_WIDGET_URL_SCHEME || 'token-monitor').trim();
+  let snapshotFileName = 'snapshot.json';
+  let widgetKind = DEFAULT_WIDGET_KIND;
+  const configCandidates = [
+    path.join(process.resourcesPath, 'token-monitor-widget.json'),
+    path.resolve(__dirname, '..', '..', 'build', 'macos-widget', 'widget-config.json')
+  ];
+  if (!appGroup) {
+    for (const configPath of configCandidates) {
+      try {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        appGroup = String(config.appGroup || '').trim();
+        urlScheme = String(config.urlScheme || urlScheme).trim();
+        widgetKind = String(config.widgetKind || widgetKind).trim();
+        snapshotFileName = String(config.snapshotFileName || snapshotFileName).trim();
+        if (appGroup) break;
+      } catch (_) {}
+    }
+  }
+  const snapshotPath = resolveMacWidgetSnapshotPath({
+    appGroup,
+    home: app.getPath('home'),
+    snapshotFileName
+  });
+  if (!snapshotPath) {
+    cachedMacWidgetConfiguration = null;
+    return cachedMacWidgetConfiguration;
+  }
+  cachedMacWidgetConfiguration = {
+    appGroup,
+    snapshotPath,
+    widgetKind,
+    urlScheme: (() => {
+      try { return normalizeWidgetURLScheme(urlScheme); } catch (_) { return 'token-monitor'; }
+    })()
+  };
+  return cachedMacWidgetConfiguration;
+}
+
+function macWidgetRuntimeSupported(
+  platform = process.platform,
+  osRelease = platform === 'darwin' ? os.release() : ''
+) {
+  return macWidgetRuntimeSupport({ platform, osRelease }).supported;
+}
+
+function historyResolverOptions() {
+  const { url: hubUrl, secret } = effectiveHubConfig();
+  return {
+    aggregateHistory,
+    embeddedHub,
+    historyEnabled: settings?.historyEnabled !== false,
+    hubMode: settings?.hubMode,
+    hubUrl,
+    // In sync/host mode the headless agent owns this machine's producer while its
+    // PID is live. Do not let the widget's last pre-handoff snapshot compete with
+    // the newer Hub record; local mode always owns its collector by contract.
+    localDevice: ownsUsageRuntime() ? (lastCollectedDevice || localDevice) : null,
+    mode,
+    secret
+  };
+}
+
+function getCompleteHistory() {
+  return resolveCompleteHistory(historyResolverOptions());
+}
+
+function macWidgetPresentation() {
+  return Object.freeze({
+    currencyCode: settings?.currency,
+    currencyRate: effectiveRates?.[normalizeCurrency(settings?.currency)] || 1,
+    compactNumbers: settings?.showCompactTotalTokens !== false,
+    compactTokenUnits: settings?.compactTokenUnits,
+    showCost: true,
+    locale: settings?.language,
+    theme: Object.keys(settings?.themeColors || {}).length ? 'custom' : 'system'
+  });
+}
+
+function ensureMacWidgetDemand() {
+  if (process.platform !== 'darwin') return null;
+  if (macWidgetDemand) return macWidgetDemand;
+  const widget = macWidgetConfiguration();
+  if (!widget) return null;
+  // The demand leases live beside the snapshot in the app group container. The
+  // widget extension touches the full marker on every timeline() request and
+  // the short provisional marker on a non-gallery snapshot() (the add flow),
+  // so a fresh marker here means "a Widget is on screen or being placed". The
+  // watcher arms immediately so a first placement primes the initial snapshot
+  // within moments; the reconcile poll catches anything the watcher missed.
+  const markerDirectory = path.dirname(widget.snapshotPath);
+  macWidgetDemand = createMacWidgetDemandState({
+    markerPath: path.join(markerDirectory, WIDGET_DEMAND_MARKER),
+    provisionalMarkerPath: path.join(markerDirectory, WIDGET_DEMAND_PROVISIONAL_MARKER),
+    onActivation: () => {
+      const visibleStats = electronPresentationStats(latestStats);
+      scheduleMacWidgetSnapshot(visibleStats, captureMacWidgetProducerOwner());
+    },
+    logger: (message) => console.warn(message)
+  });
+  macWidgetDemand.start();
+  return macWidgetDemand;
+}
+
+function captureMacWidgetWork({ stats, owner }) {
+  const widget = macWidgetConfiguration();
+  if (!widget) return null;
+  // No Widget on screen means no WidgetKit render loop is asking for data, so
+  // the whole snapshot pipeline (history resolution, serialization, fsync and
+  // the reload helper spawn) can be skipped. Only a confirmed missing or stale
+  // demand marker closes this gate; an unarmed state must not starve someone
+  // who does have a Widget.
+  if (macWidgetDemand && !macWidgetDemand.isInstalled()) return null;
+  const resolverConfig = Object.freeze({ ...historyResolverOptions() });
+  const sourceKey = macWidgetHistorySourceKey(resolverConfig);
+  return {
+    stats,
+    owner: Object.freeze({
+      epoch: owner.epoch,
+      sourceKey
+    }),
+    resolverConfig,
+    historyCachePath: completeHistorySource(resolverConfig) === 'remote'
+      ? macWidgetHistoryCachePath(app.getPath('userData'), sourceKey)
+      : null,
+    presentation: macWidgetPresentation(),
+    snapshotPath: widget.snapshotPath,
+    widgetKind: widget.widgetKind
+  };
+}
+
+function ensureMacWidgetSnapshotController() {
+  if (!macWidgetRuntimeSupported()) return null;
+  if (macWidgetSnapshotController) return macWidgetSnapshotController;
+  macWidgetSnapshotController = createMacWidgetSnapshotController({
+    startPaused: !macWidgetPublicationReady,
+    captureWork: captureMacWidgetWork,
+    resolveHistory: (work) => resolveMacWidgetHistory({
+      generation: work.owner.epoch,
+      sourceKey: work.owner.sourceKey,
+      revision: work.stats?.historyRevision,
+      fetchHistory: () => resolveCompleteHistory(work.resolverConfig),
+      ...(work.historyCachePath ? {
+        loadCachedHistory: () => readMacWidgetHistoryCache(
+          work.historyCachePath,
+          work.owner.sourceKey,
+          { logger: (message) => console.warn(message) }
+        ),
+        saveCachedHistory: (history) => writeMacWidgetHistoryCache(
+          work.historyCachePath,
+          work.owner.sourceKey,
+          history,
+          { logger: (message) => console.warn(message) }
+        )
+      } : {}),
+      minIntervalMs: completeHistorySource(work.resolverConfig) === 'remote' ? undefined : 0,
+      logger: (message) => console.warn(message)
+    }),
+    prepareSnapshot: (work, history) => prepareMacWidgetSnapshotUpdate(work.stats, {
+      snapshotPath: work.snapshotPath,
+      snapshotOptions: {
+        presentation: work.presentation,
+        history
+      },
+      logger: (message) => console.warn(message)
+    }),
+    commitSnapshot: (prepared, options) => commitMacWidgetSnapshot(prepared, {
+      isCurrent: options.isCurrent,
+      logger: (message) => console.warn(message)
+    }),
+    syncSnapshot: (_work, committed, prepared) => syncMacWidgetSnapshotDirectory({
+      ...committed,
+      fs: prepared?.fs
+    }),
+    discardSnapshot: discardMacWidgetSnapshot,
+    reloadSnapshot: (work, options) => requestMacWidgetReload({
+      widgetKind: work.widgetKind,
+      isCurrent: options.isCurrent,
+      runtimeSupported: macWidgetRuntimeSupported(),
+      logger: (message) => console.warn(message)
+    }),
+    logger: (message) => console.warn(message)
+  });
+  return macWidgetSnapshotController;
+}
+
+function captureMacWidgetProducerOwner() {
+  return ensureMacWidgetSnapshotController()?.captureProducerOwner() || null;
+}
+
+function advanceMacWidgetProducerAndSourceEpoch() {
+  ensureMacWidgetSnapshotController()?.advanceProducerAndSourceEpoch();
+}
+
+function advanceMacWidgetSourceEpoch() {
+  ensureMacWidgetSnapshotController()?.advanceSourceEpoch();
+}
+
+function refreshMacWidgetHistorySource() {
+  advanceMacWidgetSourceEpoch();
+  const visibleStats = electronPresentationStats(latestStats);
+  scheduleMacWidgetSnapshot(visibleStats, captureMacWidgetProducerOwner());
+}
+
+function scheduleMacWidgetSnapshot(stats, producerOwner) {
+  if (!macWidgetRuntimeSupported() || !stats) return false;
+  return ensureMacWidgetSnapshotController()?.enqueue({ stats, producerOwner }) || false;
+}
+
+// Two options, both for the cold-start seed and neither for live stats.
+// `skipExport` keeps a republished snapshot from spending the auto-export
+// interval that this run's first real scan needs. `deferToRenderer` waits for
+// the renderer to finish loading, and is deliberately not the default: a live
+// push that lands mid-load is already covered by the refreshStats() the renderer
+// runs on init, so deferring every one of them would only queue a listener per
+// frame against a slow load and then replay a burst of superseded stats.
+function sendPush(payload, options = {}) {
   const previousHistoryRevision = statsHistoryRevision(latestStats);
+  let rendererPayload = payload;
   if (payload?.data?.stats) {
     injectLocalDeviceStatus(payload.data.stats);
     latestStats = payload.data.stats;
+    const visibleStats = electronPresentationStats(latestStats);
+    rendererPayload = {
+      ...payload,
+      data: { ...payload.data, stats: visibleStats }
+    };
+    scheduleMacWidgetSnapshot(visibleStats, options.widgetProducerOwner);
     syncTrayCodexActiveAccount();
     updateTrayDisplay();
-    if (settings.exportAutoEnabled && settings.exportDir && Date.now() - lastExportAt >= exportIntervalMs()) {
+    if (!options.skipExport && settings.exportAutoEnabled && settings.exportDir && Date.now() - lastExportAt >= exportIntervalMs()) {
       lastExportAt = Date.now();
       writeExportTo(settings.exportDir, payload.data.stats.periods, { skipUnchanged: true })
         .catch((err) => console.warn(`[export] auto-export failed: ${err.message}`));
     }
   }
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    try { mainWindow.webContents.send('stats:push', payload); } catch (_) {}
+  if (options.deferToRenderer) {
+    // Only while it is still the newest thing published. A slow load can outlast
+    // the first real collection, and delivering the queued snapshot then would
+    // walk the numbers backwards until the next push.
+    const deferred = payload?.data?.stats;
+    sendMainWindowEvent('stats:push', rendererPayload, () => !deferred || latestStats === deferred);
+  } else if (mainWindow && !mainWindow.isDestroyed()) {
+    try { mainWindow.webContents.send('stats:push', rendererPayload); } catch (_) {}
   }
   if (payload?.data?.stats) {
     const nextHistoryRevision = statsHistoryRevision(payload.data.stats);
@@ -3241,12 +4186,21 @@ function updateDiscordRpcDisplay(stats) {
   updateDiscordRpc(stats, settings?.currency, compactTokenDisplayOptions());
 }
 
+function refreshTrayContextMenu() {
+  if (!tray || tray.isDestroyed()) return;
+  if (typeof tray.refreshContextMenu === 'function') tray.refreshContextMenu();
+}
+
 function updateTrayDisplay() {
   if (!tray || tray.isDestroyed()) return;
+  // Keep the exported D-Bus menu in sync (radio checks, refresh state, Codex
+  // accounts) — see the Linux note in createTray().
+  refreshTrayContextMenu();
+  const visibleStats = electronPresentationStats(latestStats);
   const mode = settings?.trayContent || 'tokens';
   const currency = normalizeCurrency(settings?.currency);
   const compactOptions = compactTokenDisplayOptions();
-  const limitText = formatTrayText(latestStats, mode, currency, {
+  const limitText = formatTrayText(visibleStats, mode, currency, {
     limitProviderOrder: settings?.limitProviderOrder,
     limitProviders: settings?.limitProviders,
     showLimitUsed: settings?.showLimitUsed,
@@ -3261,57 +4215,136 @@ function updateTrayDisplay() {
   const text = trayImageMode || customImageMode ? '' : limitText;
   if (trayShowsTitle(process.platform)) tray.setTitle(text);
   // Tooltip always shows a useful summary, even in icon-only mode where setTitle is blank.
-  const tip = formatTrayText(latestStats, 'both', currency, compactOptions);
+  const tip = formatTrayText(visibleStats, 'both', currency, compactOptions);
   tray.setToolTip(`Token Monitor - ${tip}`);
   // Icon: rendered bars image in bar modes, otherwise the app icon.
   let icon = null;
   if (barsImageMode || trayImageMode || customImageMode) {
     icon = providerTrayIcons[mode];
   } else {
-    const usageIconId = pickUsageTrayIconId(latestStats, mode, Object.keys(providerTrayIcons));
+    const usageIconId = pickUsageTrayIconId(visibleStats, mode, Object.keys(providerTrayIcons));
     if (usageIconId) icon = providerTrayIcons[usageIconId];
   }
   tray.setImage(icon || getDefaultTrayIcon());
 }
 
+function recordDiagnosticEvent(event) {
+  diagnosticJournal.record({
+    ...event,
+    modeAtEvent: settings?.hubMode || 'local'
+  });
+}
+
 function sendStatus(connected, extra) {
+  const previous = streamConnected;
   streamConnected = Boolean(connected);
   streamFailure = streamConnected ? null : ((extra && extra.reason) ? { reason: extra.reason, detail: extra.detail ?? null } : streamFailure);
+  if (mode === 'sync') {
+    if (streamConnected && !previous) {
+      recordDiagnosticEvent({ subsystem: 'stream', code: 'stream-reconnected' });
+    } else if (!streamConnected && (previous || extra?.reason)) {
+      recordDiagnosticEvent({
+        subsystem: 'stream',
+        code: 'stream-disconnected',
+        detailCode: diagnosticStreamDetailCode(extra || streamFailure || {})
+      });
+    }
+  }
   sendPush({ event: 'status', data: { connected: streamConnected, mode, ...(extra || {}) } });
 }
 
-function stopLocalCollector() {
-  if (deviceRuntimeHandle) { try { deviceRuntimeHandle.stop(); } catch (_) {} }
+// `options` is forwarded verbatim to the runtime; the quit path passes
+// `skipCloseWatchers` (see stopAll).
+function stopLocalCollector(options = {}) {
+  usageRuntimeReconciler.cancel();
+  usageRuntimeReconciler.setActiveKey(null);
+  if (deviceRuntimeHandle) { try { deviceRuntimeHandle.stop(options); } catch (_) {} }
   deviceRuntimeHandle = null;
   localDevice = null;
   localStats = null;
 }
 
+// Show the last full scan's totals while the first one of this run is still
+// going, instead of zeros for the tens of seconds it takes. deviceRecordFromAnchor
+// owns the trust rules; anything it rejects leaves the renderer on its normal
+// wait-for-real-data path.
+function primeLocalStatsFromAnchor(usageOptions, widgetProducerOwner) {
+  // Cold start only. startMode() re-enters here on structural settings changes
+  // as well, and there the numbers already collected are newer than any anchor.
+  if (lastCollectedDevice) return;
+  const deviceRecord = deviceRecordFromAnchor(
+    readJson(path.join(sharedDataDir(), 'collector-anchor.json'), null),
+    {
+      envelope: electronDeviceEnvelope(),
+      clients: usageOptions.clients,
+      allTimeSince: usageOptions.allTimeSince,
+      projectsEnabled: usageOptions.projectsEnabled,
+      wslScanEnabled: usageOptions.wslScanEnabled,
+      wslSupported: process.platform === 'win32',
+      hostname: os.hostname(),
+      platform: `${process.platform}-${process.arch}`
+    }
+  );
+  if (!deviceRecord) return;
+  // The anchor holds raw collector output, while everything the renderer is ever
+  // shown has been through the archives first. Project the same way or the seed
+  // reads low for anyone with an un-tracked client or retained sessions, and then
+  // jumps when the first scan lands. Read-only on purpose: the capture step
+  // records a fresh observation, and an anchor from hours ago is not one.
+  const visible = summaryWithArchivesApplied(
+    deviceRecord,
+    settings?.sessionUsageArchiveEnabled === false ? null : ensureSessionUsageArchiveLoaded(),
+    sessionUsageArchiveDate(deviceRecord)
+  );
+  localDevice = visible;
+  localStats = withHistoryPreview(aggregateDevices([visible], 0), [visible]);
+  // Through the normal publisher, not straight to the renderer: the tray reads
+  // what sendPush sets, and in tray mode the window is hidden, so a seed that
+  // only reached the renderer would leave the one visible surface on zero.
+  // This one waits for the renderer: it is the only stats push whose whole point
+  // is to be on screen before the first scan, so it cannot be left to the
+  // refreshStats() that covers the rest. It must also not spend the export
+  // interval this run's first live scan needs on a snapshot it is republishing.
+  sendPush({
+    event: 'stats',
+    data: { type: 'stats', reason: 'anchor', stats: localStats, at: deviceRecord.receivedAt }
+  }, { skipExport: true, deferToRenderer: true, widgetProducerOwner });
+}
+
 function startLocalCollector() {
   stopLocalCollector();
+  const widgetProducerOwner = captureMacWidgetProducerOwner();
   mode = 'local';
   sendStatus(false, { reason: 'collecting' });
+  // One config object for both, so the fingerprint the seed validates against
+  // cannot drift from the one the collector will compute.
+  const usageOptions = electronUsageConfig('collector');
+  primeLocalStatsFromAnchor(usageOptions, widgetProducerOwner);
   deviceRuntimeHandle = createDeviceRuntime({
     envelope: electronDeviceEnvelope(),
     initialLimits: lastCollectedDevice?.limits,
     limitsOptions: electronLimitsConfig(),
     transformUsage: summaryWithArchivedClientUsage,
-    usageOptions: electronUsageConfig('collector'),
+    usageOptions,
     progressive: true,
     onRecord: (summary, meta) => {
+      seedInitialLimitProviders(summary);
       const reason = meta.reason;
       const visibleSummary = summary;
       localDevice = { ...visibleSummary, receivedAt: new Date().toISOString() };
       lastCollectedDevice = localDevice;
       localStats = withHistoryPreview(aggregateDevices([localDevice], 0), [localDevice]);
+      attachLocalNativeViews(localStats, localDevice);
       updateDiscordRpcDisplay(localStats);
-      sendPush({ event: 'stats', data: { type: 'stats', reason, stats: localStats, at: new Date().toISOString() } });
+      sendPush({ event: 'stats', data: { type: 'stats', reason, stats: localStats, at: new Date().toISOString() } }, { widgetProducerOwner });
       sendStatus(true, { reason });
     },
+    onDiagnosticEvent: recordDiagnosticEvent,
     onError: (error, reason) => sendStatus(false, { reason: `${reason}:${error.message}` })
   }, {
     limitsDeps: electronLimitsDeps()
   });
+  usageRuntimeReconciler.setActiveKey(usageConfigFingerprint(usageOptions));
   drainPendingRuntimeActions(deviceRuntimeHandle);
 }
 
@@ -3340,7 +4373,13 @@ function parseSseChunk(chunk) {
 
 async function startStatsStream(options = {}) {
   stopStatsStream();
-  if (options.resetSnapshot) latestHubStats = null;
+  const generation = hubModeGeneration;
+  const widgetProducerOwner = captureMacWidgetProducerOwner();
+  if (settings?.hubMode !== 'client') return;
+  const cacheIdentity = currentHubStatsIdentity('client');
+  if (options.resetSnapshot) {
+    clearLatestHubStatsCache();
+  }
   const { url: hubUrl, secret } = effectiveHubConfig();
   if (!hubUrl) return;
   mode = 'sync';
@@ -3352,6 +4391,7 @@ async function startStatsStream(options = {}) {
       headers: { accept: 'text/event-stream', ...(secret ? { authorization: `Bearer ${secret}` } : {}) },
       signal: controller.signal
     });
+    if (!hubModeRequestIsCurrent(generation, 'client', cacheIdentity)) return;
     if (!response.ok || !response.body) {
       sendStatus(false, classifyStreamFailure({ status: response.status }));
       scheduleStreamRetry();
@@ -3362,7 +4402,9 @@ async function startStatsStream(options = {}) {
     const decoder = new TextDecoder();
     let buffer = '';
     for (;;) {
+      if (!hubModeRequestIsCurrent(generation, 'client', cacheIdentity)) return;
       const { value, done } = await reader.read();
+      if (!hubModeRequestIsCurrent(generation, 'client', cacheIdentity)) return;
       if (done) break;
       buffer += decoder.decode(value, { stream: true });
       let idx;
@@ -3372,19 +4414,20 @@ async function startStatsStream(options = {}) {
         let parsed = parseSseChunk(chunk);
         if (parsed) {
           if (parsed.event === 'stats' && parsed.data?.stats) {
-            latestHubStats = parsed.data.stats;
+            setLatestHubStatsCache(parsed.data.stats, 'client', generation, cacheIdentity);
             const displayStats = composeLocalSyncStats(latestHubStats, lastCollectedDevice);
             parsed = { ...parsed, data: { ...parsed.data, stats: displayStats } };
             updateDiscordRpcDisplay(displayStats);
           }
-          sendPush(parsed);
+          sendPush(parsed, { widgetProducerOwner });
         }
       }
     }
+    if (!hubModeRequestIsCurrent(generation, 'client', cacheIdentity)) return;
     sendStatus(false, classifyStreamFailure({ eof: true }));
     scheduleStreamRetry();
   } catch (error) {
-    if (controller.signal.aborted) return;
+    if (controller.signal.aborted || !hubModeRequestIsCurrent(generation, 'client', cacheIdentity)) return;
     sendStatus(false, classifyStreamFailure({ errorCode: error?.cause?.code || error?.code, message: error?.message }));
     scheduleStreamRetry();
   }
@@ -3404,6 +4447,37 @@ function showPopover() {
   // case where macOS fires blur immediately after show because the click that
   // opened us still has the menu bar as the focused element.
   setTimeout(() => { suppressNextBlurHide = false; }, 250);
+}
+
+function openMainWindowFromWidget() {
+  if (!app.isReady()) return;
+  const destination = pendingMacWidgetOpen || { page: 'overview', view: 'home', settings: false };
+  pendingMacWidgetOpen = null;
+  updateRendererViewState({ breakdown: destination.view });
+  applyMacActivationPolicy({ mainWindowVisible: true });
+  // Closing the window with the tray icon off destroys it while macOS keeps the
+  // app alive, so a widget click has to be able to build one again — the same
+  // recovery focusExistingWindow() performs for the dock and the shortcut.
+  // Bailing out instead consumed the open-url event and left the widget dead
+  // for the rest of the session, since nothing else reads pendingMacWidgetOpen.
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  const sendDestination = () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    if (destination.settings) mainWindow.webContents.send('settings:open');
+    else mainWindow.webContents.send('view:open', destination.view);
+  };
+  if (mainWindow.webContents.isLoadingMainFrame()) mainWindow.webContents.once('did-finish-load', sendDestination);
+  else sendDestination();
+  if (settings?.trayMode && tray) {
+    showPopover();
+    return;
+  }
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  applyMacSpaceBehavior(false);
+  // A collapsed bubble would otherwise swallow the navigation we just sent.
+  if (floatingBubbleState.collapsed) expandFloatingBubble();
+  else mainWindow.show();
 }
 
 function hidePopover() {
@@ -3443,11 +4517,18 @@ function currentWindowToggleShortcutStatus() {
 
 // Strip OpenCode session cookies from a profiles map before it reaches the
 // renderer; the UI only needs the profile name and enabled flag, not the value.
+// Default-deny: name every field allowed through instead of spreading the stored
+// profile. A spread hands any field added later to the renderer verbatim, which
+// is exactly how a credential leaks.
 function redactOpencodeProfilesForRenderer(profiles) {
   if (!profiles || typeof profiles !== 'object') return profiles;
-  const out = {};
+  const out = Object.create(null);
   for (const [name, profile] of Object.entries(profiles)) {
-    out[name] = { ...profile, cookie: profile && profile.cookie ? 'set' : '' };
+    out[name] = {
+      enabled: profile?.enabled !== false,
+      cookie: profile?.cookie ? 'set' : '',
+      apiKey: profile?.apiKey ? 'set' : ''
+    };
   }
   return out;
 }
@@ -3485,10 +4566,95 @@ function redactThirdPartyProfilesForRenderer(profiles) {
           }
         : {}),
       accessToken: profile?.accessToken ? 'set' : '',
-      apiKey: profile?.apiKey ? 'set' : ''
+      apiKey: profile?.apiKey ? 'set' : '',
+      refreshToken: profile?.refreshToken ? 'set' : ''
     };
   }
   return out;
+}
+
+// Sub2API rotates its single-use refresh token on every renewal. Persist the
+// new pair with a compare-and-swap before the collector retries with it.
+// New profiles require a current access token and are never persisted from a
+// renewal callback while their save probe is still in flight.
+function persistThirdPartyCredentialsRenewal(renewal = {}) {
+  const accountName = String(renewal.accountName || '').trim();
+  const adapter = thirdPartyLimits.normalizeAdapterId(renewal.adapter);
+  const profiles = settings?.thirdPartyProfiles || {};
+  const profile = profiles[accountName];
+  if (!accountName || !profile || profile.adapter !== adapter) return false;
+  const previousAccessToken = String(renewal.previous?.accessToken || '');
+  const previousRefreshToken = String(renewal.previous?.refreshToken || '');
+  if (
+    String(profile.accessToken || '') !== previousAccessToken
+    || String(profile.refreshToken || '') !== previousRefreshToken
+  ) return false;
+  const normalized = thirdPartyLimits.normalizeThirdPartyProfile({
+    ...profile,
+    accessToken: renewal.next?.accessToken,
+    refreshToken: renewal.next?.refreshToken
+  });
+  if (!normalized) return false;
+  settings.thirdPartyProfiles = {
+    ...profiles,
+    [accountName]: { ...normalized, enabled: profile.enabled !== false }
+  };
+  try {
+    saveSettings({ throwOnError: true });
+  } catch (error) {
+    // Keep the rotated pair in memory so this process can recover on a later
+    // settings write, but tell the caller not to present this renewal as durable.
+    console.log(`[thirdparty] credential renewal persist failed: ${error?.message || error}`);
+    return false;
+  }
+  return true;
+}
+
+function persistThirdPartyAccountKey(update = {}) {
+  const accountName = String(update.accountName || '').trim();
+  const adapter = thirdPartyLimits.normalizeAdapterId(update.adapter);
+  const accountKey = thirdPartyLimits.normalizeCanonicalAccountKey(update.accountKey);
+  const profiles = settings?.thirdPartyProfiles || {};
+  const profile = profiles[accountName];
+  if (
+    !accountName
+    || adapter !== thirdPartyLimits.SUB2API_ADAPTER
+    || !accountKey
+    || !profile
+    || profile.adapter !== adapter
+  ) return false;
+  const baseUrl = thirdPartyLimits.normalizeThirdPartyBaseUrl(update.baseUrl);
+  if (thirdPartyLimits.normalizeThirdPartyBaseUrl(profile.baseUrl) !== baseUrl) return false;
+  if (
+    String(profile.accessToken || '') !== String(update.previous?.accessToken || '')
+    || String(profile.refreshToken || '') !== String(update.previous?.refreshToken || '')
+  ) return false;
+  if (thirdPartyLimits.normalizeCanonicalAccountKey(profile.canonicalAccountKey) === accountKey) {
+    return true;
+  }
+  const normalized = thirdPartyLimits.normalizeThirdPartyProfile({
+    ...profile,
+    canonicalAccountKey: accountKey
+  });
+  if (!normalized) return false;
+  settings.thirdPartyProfiles = {
+    ...profiles,
+    [accountName]: { ...normalized, enabled: profile.enabled !== false }
+  };
+  try {
+    saveSettings({ throwOnError: true });
+  } catch (error) {
+    console.log(`[thirdparty] account identity persist failed: ${error?.message || error}`);
+    return false;
+  }
+  return true;
+}
+
+function thirdPartyProfileWithCanonicalIdentity(profile, provider) {
+  return thirdPartyLimits.normalizeThirdPartyProfile({
+    ...profile,
+    canonicalAccountKey: provider?.accountKey
+  });
 }
 
 function settingsForRenderer() {
@@ -3532,6 +4698,21 @@ function settingsForRenderer() {
     : qoderCookie(process.env)
       ? 'env'
       : '';
+  const traeAccessTokenSource = settings?.traeAccessToken
+    ? 'settings'
+    : traeAccessToken(process.env)
+      ? 'env'
+      : '';
+  const zedCookieSource = settings?.zedCookie
+    ? 'settings'
+    : zedCookie(process.env)
+      ? 'env'
+      : '';
+  const commandcodeCookieSource = settings?.commandcodeCookie
+    ? 'settings'
+    : commandcodeCookie(process.env)
+      ? 'env'
+      : '';
   const ollamaCookieSource = settings?.ollamaCookie
     ? 'settings'
     : ollamaSessionCookie(process.env)
@@ -3553,8 +4734,17 @@ function settingsForRenderer() {
   const redactedCredentials = credentialSettingsForRenderer(settings, {
     expose: ['hubHostSecret', 'secret']
   });
+  const rendererSettings = { ...settings };
+  for (const key of [
+    'workbuddyAccessToken',
+    'workbuddyUserId',
+    'workbuddyEnterpriseId',
+    'workbuddyLocale',
+    'workbuddyDomain',
+    'workbuddyDepartmentInfo'
+  ]) delete rendererSettings[key];
   return {
-    ...settings,
+    ...rendererSettings,
     locale: trayMenuLocale(),
     ...redactedCredentials,
     // On a hub the shared list is the truth; settings.subscriptions is only the
@@ -3572,8 +4762,13 @@ function settingsForRenderer() {
     zaiTeamOrganizationId: settings?.zaiTeamOrganizationId ? 'set' : '',
     zaiTeamProjectId: settings?.zaiTeamProjectId ? 'set' : '',
     volcengineAccessKeyId: settings?.volcengineAccessKeyId ? 'set' : '',
+    volcengineAgentAccessKeyId: settings?.volcengineAgentAccessKeyId ? 'set' : '',
     claudeWebCookie: settings?.claudeWebCookie ? 'set' : '',
     qoderCookie: settings?.qoderCookie ? 'set' : '',
+    traeAccessToken: settings?.traeAccessToken ? 'set' : '',
+    traeDeviceId: settings?.traeDeviceId ? 'set' : '',
+    zedCookie: settings?.zedCookie ? 'set' : '',
+    commandcodeCookie: settings?.commandcodeCookie ? 'set' : '',
     ollamaCookie: settings?.ollamaCookie ? 'set' : '',
     // Never ship OpenCode session cookies to the renderer; the UI only needs to
     // know whether a cookie is configured, not its value.
@@ -3590,6 +4785,7 @@ function settingsForRenderer() {
     openrouterEnvConfigured: Boolean(openrouterLimits.openrouterToken(process.env)),
     thirdPartyEnvConfigured: thirdPartyLimits.configuredAccounts({}, { env: process.env }).length > 0,
     codexManagedAccounts: codexAccountsForRenderer(),
+    antigravityManagedAccounts: antigravityAccountsForRenderer(),
     mimoManagedAccounts: mimoAccountsForRenderer(),
     claudeWebCookieConfigured: Boolean(currentClaudeWebCookie()),
     claudeWebCookieSource,
@@ -3607,6 +4803,12 @@ function settingsForRenderer() {
     volcengineCredentialsSource,
     qoderCookieConfigured: Boolean(currentQoderCookie()),
     qoderCookieSource,
+    traeAccessTokenConfigured: Boolean(currentTraeAccessToken()),
+    traeAccessTokenSource,
+    zedCookieConfigured: Boolean(currentZedCookie()),
+    zedCookieSource,
+    commandcodeCookieConfigured: Boolean(currentCommandcodeCookie()),
+    commandcodeCookieSource,
     ollamaCookieConfigured: Boolean(currentOllamaCookie()),
     ollamaCookieSource,
     kimiApiKeyConfigured: Boolean(currentKimiApiKey()),
@@ -3619,6 +4821,75 @@ function settingsForRenderer() {
     currencyRateInfo: rateCache ? { source: rateCache.source, date: rateCache.date, fetchedAt: rateCache.fetchedAt } : null,
     windowToggleShortcutStatus: currentWindowToggleShortcutStatus()
   };
+}
+
+// The tray sits in system-integrated UI (menubar / taskbar / panel), whose theme
+// is independent of the app's own: Windows lets the system be dark while apps
+// stay light, which is exactly the case a plain `shouldUseDarkColors` gets wrong.
+// That dedicated property only exists on darwin and win32, so elsewhere the app
+// theme is the closest signal available.
+function systemDarkTrayUi() {
+  try {
+    if (process.platform === 'darwin' || process.platform === 'win32') {
+      const systemIntegrated = nativeTheme.shouldUseDarkColorsForSystemIntegratedUI;
+      if (typeof systemIntegrated === 'boolean') return systemIntegrated;
+    }
+    return nativeTheme.shouldUseDarkColors === true;
+  } catch (_) {
+    return false;
+  }
+}
+
+const WINDOWS_PERSONALIZE_KEY = 'HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize';
+
+function readWindowsSystemDarkUi() {
+  return new Promise((resolve) => {
+    try {
+      require('node:child_process').execFile(
+        'reg',
+        ['query', WINDOWS_PERSONALIZE_KEY, '/v', 'SystemUsesLightTheme'],
+        { windowsHide: true, timeout: 5000 },
+        (error, stdout) => resolve(error ? null : parseWindowsSystemUsesLightTheme(stdout))
+      );
+    } catch (_) {
+      resolve(null);
+    }
+  });
+}
+
+// The value the renderer last heard, so a settled reading can be told from a
+// repeat of the one we already published.
+let currentSystemDarkUi = null;
+
+function currentSystemDarkTrayUi() {
+  if (currentSystemDarkUi === null) currentSystemDarkUi = systemDarkTrayUi();
+  return currentSystemDarkUi;
+}
+
+function pushSystemUiThemeToRenderer(dark) {
+  const value = typeof dark === 'boolean' ? dark : currentSystemDarkTrayUi();
+  currentSystemDarkUi = value;
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try { mainWindow.webContents.send('theme:systemUi', { dark: value }); } catch (_) {}
+}
+
+// Windows cannot answer this at event time — see watchSystemDarkUi in tray.js
+// for what was measured. Everywhere else the event already carries the truth.
+let systemUiThemeRevision = 0;
+
+async function pushSystemUiThemeAfterChange() {
+  if (process.platform !== 'win32') {
+    pushSystemUiThemeToRenderer(systemDarkTrayUi());
+    return;
+  }
+  const revision = ++systemUiThemeRevision;
+  await watchSystemDarkUi({
+    read: readWindowsSystemDarkUi,
+    wait: (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
+    isCurrent: () => revision === systemUiThemeRevision,
+    held: currentSystemDarkTrayUi(),
+    publish: (dark) => pushSystemUiThemeToRenderer(dark)
+  });
 }
 
 function pushSettingsToRenderer() {
@@ -3635,9 +4906,29 @@ function pushSettingsToRenderer() {
   }
 }
 
+function refreshLimitStatsPresentation() {
+  if (!latestStats) return;
+  const visibleStats = electronPresentationStats(latestStats);
+  scheduleMacWidgetSnapshot(visibleStats, captureMacWidgetProducerOwner());
+  updateTrayDisplay();
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    try {
+      mainWindow.webContents.send('stats:push', {
+        event: 'stats',
+        data: { type: 'stats', reason: 'presentation', mode, stats: visibleStats }
+      });
+    } catch (_) {}
+  }
+}
+
 function sendMimoAccountsPush() {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   try { mainWindow.webContents.send('mimo:accounts', mimoAccountsForRenderer()); } catch (_) {}
+}
+
+function sendAntigravityAccountsPush() {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  try { mainWindow.webContents.send('antigravity:accounts', antigravityAccountsForRenderer()); } catch (_) {}
 }
 
 function unregisterWindowToggleShortcut() {
@@ -3675,33 +4966,34 @@ function trayMenuLocale() {
   return resolveLocale(settings?.language || 'auto', preferredLanguages);
 }
 
-function sendMainWindowEvent(channel, payload) {
+// `isStillCurrent`, when given, is re-checked after the wait: see
+// deferredWindowSend.js.
+function sendMainWindowEvent(channel, payload, isStillCurrent) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
-  const send = () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return;
-    try { mainWindow.webContents.send(channel, payload); } catch (_) {}
-  };
-  if (mainWindow.webContents.isLoading()) mainWindow.webContents.once('did-finish-load', send);
-  else send();
+  sendWhenRendererReady(mainWindow.webContents, channel, payload, isStillCurrent);
 }
 
 async function refreshFromTray() {
   if (trayRefreshInFlight) return;
-  trayRefreshInFlight = true;
-  try {
-    const stats = await fetchStats({ force: true });
-    // Collector ticks normally publish their own final snapshot. Only bridge the
-    // result when fetchStats returned a different object (for example, a remote hub
-    // fetch while an external headless agent owns collection).
-    if (stats && stats !== latestStats) {
-      sendPush({ event: 'stats', data: { stats, mode, reason: 'manual' } });
+  const widgetProducerOwner = captureMacWidgetProducerOwner();
+  return runTrayMenuAction({
+    setInFlight: (value) => { trayRefreshInFlight = value; },
+    refreshContextMenu: refreshTrayContextMenu,
+    action: async () => {
+      try {
+        const stats = await fetchStats({ force: true });
+        // Collector ticks normally publish their own final snapshot. Only bridge the
+        // result when fetchStats returned a different object (for example, a remote hub
+        // fetch while an external headless agent owns collection).
+        if (stats && stats !== latestStats) {
+          sendPush({ event: 'stats', data: { stats, mode, reason: 'manual' } }, { widgetProducerOwner });
+        }
+      } catch (error) {
+        console.warn(`[tray] refresh failed: ${error.message}`);
+        showTrayRefreshError(error?.message || error);
+      }
     }
-  } catch (error) {
-    console.warn(`[tray] refresh failed: ${error.message}`);
-    showTrayRefreshError(error?.message || error);
-  } finally {
-    trayRefreshInFlight = false;
-  }
+  });
 }
 
 function setTrayContentFromMenu(value) {
@@ -3807,22 +5099,25 @@ async function switchCodexAccountFromTray(accountId) {
   if (trayCodexSwitchInFlight || !accountId) return;
   const currentId = trayCodexPendingAccountId || trayCodexActiveAccountId;
   if (accountId === currentId) return;
-  trayCodexSwitchInFlight = true;
-  try {
-    const result = await switchCodexSystemAccount(accountId);
-    if (!result?.ok) {
-      showTrayCodexSwitchError(result?.error);
-      return;
+  return runTrayMenuAction({
+    setInFlight: (value) => { trayCodexSwitchInFlight = value; },
+    refreshContextMenu: refreshTrayContextMenu,
+    action: async () => {
+      try {
+        const result = await switchCodexSystemAccount(accountId);
+        if (!result?.ok) {
+          showTrayCodexSwitchError(result?.error);
+          return;
+        }
+        trayCodexActiveAccountId = result.activeAccountId || accountId;
+        trayCodexPendingAccountId = trayCodexActiveAccountId;
+        trayCodexPendingSince = Date.now();
+        pushSettingsToRenderer();
+      } catch (error) {
+        showTrayCodexSwitchError(error?.message || error);
+      }
     }
-    trayCodexActiveAccountId = result.activeAccountId || accountId;
-    trayCodexPendingAccountId = trayCodexActiveAccountId;
-    trayCodexPendingSince = Date.now();
-    pushSettingsToRenderer();
-  } catch (error) {
-    showTrayCodexSwitchError(error?.message || error);
-  } finally {
-    trayCodexSwitchInFlight = false;
-  }
+  });
 }
 
 function configureWindowToggleShortcut() {
@@ -3852,6 +5147,7 @@ function ensureTray() {
       const codex = trayCodexMenuState();
       return {
         appVersion: appVersion(),
+        locale: trayMenuLocale(),
         refreshing: trayRefreshInFlight,
         trayContent: settings?.trayContent || 'tokens',
         trayMode: Boolean(settings?.trayMode),
@@ -3910,7 +5206,10 @@ function enterTrayMode() {
 function exitTrayMode() {
   applyMacActivationPolicy({ mainWindowVisible: true });
   if (mainWindow && !mainWindow.isDestroyed()) {
-    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(false);
+    // Not an unconditional false: leaving tray-only mode with hideAppIcon still
+    // on keeps the widget off the taskbar. applyWindowSettings() below would
+    // correct it either way, but only after a visible flash of the entry.
+    if (typeof mainWindow.setSkipTaskbar === 'function') mainWindow.setSkipTaskbar(skipTaskbarForSettings(settings));
     setWindowMaximizable(mainWindow, true);
     applyMacSpaceBehavior(false);
     const restore = restoredBounds() || DEFAULT_WINDOW;
@@ -3928,6 +5227,9 @@ function exitTrayMode() {
 }
 
 function startMode() {
+  hubModeGeneration += 1;
+  advanceMacWidgetProducerAndSourceEpoch();
+  clearLatestHubStatsCache();
   // Tear down collectors synchronously so they can't double-run while the
   // async reconciliation below is queued.
   stopLocalCollector();
@@ -4006,12 +5308,52 @@ function restartDeviceRuntimeForMode() {
   else startLocalCollector();
 }
 
+function usageCollectorNameForMode() {
+  return mode === 'local'
+    ? 'collector'
+    : (settings.hubMode === 'host' && embeddedHub ? 'host-collector' : 'sync-collector');
+}
+
+function usageConfigForMode() {
+  return electronUsageConfig(usageCollectorNameForMode());
+}
+
+function applyUsageRuntimeForMode() {
+  if (!deviceRuntimeHandle?.reconfigureUsage) {
+    restartDeviceRuntimeForMode();
+    return Boolean(deviceRuntimeHandle);
+  }
+  return deviceRuntimeHandle.reconfigureUsage(usageConfigForMode()) === true;
+}
+
+function reconfigureUsageRuntimeForMode() {
+  return usageRuntimeReconciler.schedule(usageConfigFingerprint(usageConfigForMode()));
+}
+
+// Quit-path teardown. Every step here must be synchronous, because performQuit
+// exits on the next line and anything awaited in between is a chance to never
+// get there. `skipCloseWatchers` is what buys that: chokidar's close() returns a
+// promise, but not before an O(N) synchronous pass over every watched entry, and
+// on a tree the size of ~/.claude/projects that pass alone blocks the main
+// thread long enough to look like a hang. The descriptors go with the process.
+// Mode switches deliberately do NOT come through here: they keep the default
+// stopLocalCollector() / stopSyncCollector() behaviour so the old watcher is
+// really gone before a new one starts on the same paths.
 function stopAll() {
   stopPersistBoundsTimer();
-  stopLocalCollector();
+  stopLocalCollector({ skipCloseWatchers: true });
   stopStatsStream();
   stopHostStats();
-  stopSyncCollector();
+  stopSyncCollector({ skipCloseWatchers: true });
+  macWidgetSnapshotController?.stop();
+  if (macWidgetDemand) {
+    macWidgetDemand.stop();
+    macWidgetDemand = null;
+  }
+  // Fire-and-forget on purpose. server.close() does not complete until every
+  // in-flight request does, so awaiting it hands a remote device on the embedded
+  // hub the power to hold our own exit open. The listening socket closes with
+  // the process, and a graceful hub close buys nothing on the way out.
   void stopEmbeddedHub();
   stopDiscordRpc();
   if (tray && !tray.isDestroyed()) tray.destroy();
@@ -4019,12 +5361,64 @@ function stopAll() {
 }
 
 let quitRequested = false;
+let quitInProgress = false;
+// Owned by the update-install guard below and by nothing else: electron-updater
+// restarts the process itself, so the exit has to stand down or the install
+// never runs.
+let skipForcedQuit = false;
+
+// An install request stands the forced exit down, and quitAndInstall() never
+// reports back whether the installer actually took over. The guard owns that
+// unconfirmed window; these two flags are all it touches here. See
+// updateInstallQuit.js for why the claim expires and what promotes it.
+// Set once the hand-off listener is actually attached; see the guard's watchdog.
+let updateHandoffObserved = false;
+
+const updateInstallQuit = createUpdateInstallQuitGuard({
+  ...updateInstallQuitPolicy(),
+  watchdogEnabled: () => updateHandoffObserved,
+  claim: () => { quitRequested = true; skipForcedQuit = true; },
+  release: () => { quitRequested = false; skipForcedQuit = false; },
+  onStalled: () => {
+    // The bound is far enough out that reaching it means the install genuinely
+    // stalled, which is exactly what the user is looking at: they pressed Install
+    // and the app neither restarted nor complained. What to do about it depends on
+    // whether the attempt survived: where the guard handed it back the update is
+    // still one press away, and only where it did not is a restart the way out.
+    setNativeAppUpdateState({
+      phase: 'error',
+      progress: null,
+      error: 'Update installer did not start',
+      errorKind: installFailureErrorKind({ spent: updateInstallQuit.isSpent(), stalled: true })
+    });
+  },
+  onHandoff: (afterStalledReport) => {
+    // The bound is a decision to stop waiting, not proof the installer is dead, so
+    // a hand-off that turns up later withdraws the report rather than leaving the
+    // app advising a restart it is about to perform itself.
+    if (!afterStalledReport) return;
+    setNativeAppUpdateState({ phase: 'downloaded', progress: 100, error: null });
+  }
+});
+
+// The single quit path. Teardown above is what used to hang, so it runs
+// synchronously and cheaply, and then app.exit() ends the process without
+// another trip through Electron's shutdown events.
+function performQuit() {
+  if (quitInProgress) return;
+  quitInProgress = true;
+  try {
+    stopAll();
+  } catch (error) {
+    console.log(`[quit] stopAll failed: ${error?.message || error}`);
+  }
+  app.exit(0);
+}
+
 function requestAppQuit() {
   if (quitRequested) return;
   quitRequested = true;
-  stopAll();
-  if (app.isReady()) app.quit();
-  else app.exit(0);
+  performQuit();
 }
 
 // Write the export file set (JSON + CSVs) into `dir`, atomically (temp + rename)
@@ -4077,6 +5471,8 @@ async function writeExportTo(dir, periods, options = {}) {
 }
 
 async function fetchStats(options = {}) {
+  const requestGeneration = hubModeGeneration;
+  const requestHubIdentity = currentHubStatsIdentity('client');
   const force = Boolean(options?.force);
   // forceHistory and forceSelfSync stay independent of `force` on purpose: tool
   // settings, account sign-ins and limits actions all refresh with { force: true },
@@ -4102,8 +5498,22 @@ async function fetchStats(options = {}) {
   const url = `${hubUrl.replace(/\/$/, '')}/api/stats`;
   const response = await fetch(url, { headers: secret ? { authorization: `Bearer ${secret}` } : {} });
   if (!response.ok) throw new Error(`Hub ${response.status}: ${(await response.text()).slice(0, 200)}`);
-  latestHubStats = await response.json();
-  return injectLocalDeviceStatus(composeLocalSyncStats(latestHubStats, lastCollectedDevice));
+  const stats = await response.json();
+  if (!hubModeRequestIsCurrent(requestGeneration, 'client', requestHubIdentity)) {
+    // The response belongs to a mode that is no longer active. Wait for the
+    // queued mode reconciliation before re-reading: Client -> Host may still
+    // be binding the embedded hub, and an immediate retry would hit its
+    // loopback URL before it is listening.
+    await modeQueue;
+    return fetchStats({
+      ...options,
+      force: false,
+      forceHistory: false,
+      forceSelfSync: false
+    });
+  }
+  setLatestHubStatsCache(stats, 'client', requestGeneration, requestHubIdentity);
+  return injectLocalDeviceStatus(composeLocalSyncStats(stats, lastCollectedDevice));
 }
 
 function managedPricingSidecarPath() {
@@ -4189,7 +5599,8 @@ let appUpdateNativeState = {
   phase: 'idle',
   version: null,
   progress: null,
-  error: null
+  error: null,
+  errorKind: null
 };
 
 function rememberSuccessfulAppUpdateCheck(latest, checkedAt = new Date().toISOString(), { clearLatest = false } = {}) {
@@ -4209,7 +5620,12 @@ function rememberSuccessfulAppUpdateCheck(latest, checkedAt = new Date().toISOSt
 }
 
 function setNativeAppUpdateState(patch = {}) {
-  appUpdateNativeState = { ...appUpdateNativeState, ...patch };
+  const next = { ...appUpdateNativeState, ...patch };
+  // A kind belongs to the error it arrived with and must never outlive it, so any
+  // patch that touches `error` without naming one clears it. That keeps the
+  // ordinary updater failures generic without every call site restating it.
+  if ('error' in patch && !('errorKind' in patch)) next.errorKind = null;
+  appUpdateNativeState = next;
   sendAppUpdatePush();
 }
 
@@ -4231,12 +5647,46 @@ function configureNativeAppUpdater() {
     const latest = latestFromUpdaterInfo(info);
     setNativeAppUpdateState({ phase: 'downloaded', version: latest?.version || info?.version || appUpdateNativeState.version || null, progress: 100, error: null });
   });
+  // The hand-off is emitted on Electron's own autoUpdater, not electron-updater's:
+  // BaseUpdater re-emits it there to mimic what Squirrel does natively. Losing it
+  // is not merely losing a confirmation, so the flag records a verified
+  // registration and nothing weaker: without the listener nothing could re-claim
+  // the flags after the grace period, and the guard would expire into a state a
+  // late hand-off could not recover from. It stops arming the watchdog instead.
+  try {
+    updateHandoffObserved = observeUpdateInstallHandoff(
+      require('electron').autoUpdater,
+      () => updateInstallQuit.noteHandoff()
+    );
+  } catch (error) {
+    updateHandoffObserved = false;
+    console.log(`[update] cannot observe the install hand-off: ${error?.message || error}`);
+  }
+  if (!updateHandoffObserved) console.log('[update] no install hand-off signal; quit recovery disabled');
   autoUpdater.on('error', (error) => {
+    // Released before the busy guard below, deliberately: update-downloaded has
+    // already cleared appUpdateNativeBusy by the time an install can fail, so a
+    // rollback behind that guard would never run and the quit flags would stay
+    // stuck for the rest of the session.
+    const wasInstalling = updateInstallQuit.abort();
     // Availability checks use the same provider but report through
-    // appUpdateLastError. Only a real download attempt owns installError.
-    if (!appUpdateNativeBusy) return;
+    // appUpdateLastError. Only a real download or install attempt owns installError.
+    if (!appUpdateNativeBusy && !wasInstalling) return;
     appUpdateNativeBusy = false;
-    setNativeAppUpdateState({ phase: 'error', progress: null, error: error?.message || String(error || 'Update failed') });
+    setNativeAppUpdateState({
+      phase: 'error',
+      progress: null,
+      error: error?.message || String(error || 'Update failed'),
+      // Where the attempt was single-use, a failed install also closed the in-app
+      // path: the controls below now offer the release page instead of a retry, and
+      // a generic "couldn't install" leaves that looking like the end of the road.
+      // A restart is what brings the retry back, so the message has to say so.
+      // `wasInstalling` is the part the helper cannot know: without it a check
+      // failure arriving after an earlier spent attempt borrows its explanation.
+      errorKind: wasInstalling
+        ? installFailureErrorKind({ spent: updateInstallQuit.isSpent() })
+        : null
+    });
   });
 }
 
@@ -4297,8 +5747,22 @@ function deriveAppUpdateState() {
     installProgress: appUpdateNativeState.progress,
     installVersion: appUpdateNativeState.version,
     installError: appUpdateNativeState.error,
+    installErrorKind: appUpdateNativeState.errorKind || null,
     downloaded: availability.downloaded,
-    installBusy: appUpdateNativeBusy || appUpdateNativeState.phase === 'checking' || appUpdateNativeState.phase === 'downloading'
+    // The hand-off window, straight from the state machine rather than inferred
+    // from a pair of booleans downstream: between the press and the installer
+    // taking over there is nothing else to tell the user.
+    installStarting: updateInstallQuit.isInstalling(),
+    // No further attempt is possible until a restart, so the action policy and the
+    // automatic downloader both have to stop offering one.
+    installRetryBlocked: updateInstallQuit.isSpent(),
+    // An install the guard is still trying to complete counts as busy: on macOS
+    // Squirrel can take tens of seconds, and leaving the control live for that long
+    // invites a second press the guard can only refuse.
+    installBusy: appUpdateNativeBusy
+      || updateInstallQuit.isInstalling()
+      || appUpdateNativeState.phase === 'checking'
+      || appUpdateNativeState.phase === 'downloading'
   };
 }
 
@@ -4319,6 +5783,23 @@ function sendAppUpdatePush() {
 }
 
 async function runAppUpdateCheck({ force = false, bypassCooldown = false } = {}) {
+  // An outstanding install owns the updater until the guard is idle again.
+  // electron-updater reports a failed check by emitting on the same global 'error'
+  // event an install failure arrives on -- checkForUpdates() emits there and
+  // rethrows -- and the handler below has nothing to tell them apart. Treating a
+  // check's failure as the install's would tear down the install, which is what the
+  // hourly check made an ordinary overlap on macOS, where an install is outstanding
+  // for as long as minutes.
+  //
+  // `isOutstanding` rather than `isInstalling`, so this covers a spent attempt too.
+  // Spent is not terminal: the bound is only where we stopped waiting, and a late
+  // hand-off still promotes it back to `handoff` and re-claims the flags. A check
+  // allowed to start in the meantime would then be in flight during a genuine
+  // hand-off, and its failure would release `skipForcedQuit` with the installer
+  // owning the exit -- the one outcome this whole path exists to prevent. Checking
+  // is worth less than that: after a spent attempt it can only find a version this
+  // process is already refusing to download.
+  if (updateInstallQuit.isOutstanding()) return deriveAppUpdateState();
   if (appUpdateCheckPromise) {
     if (force) sendAppUpdatePush();
     const activeResult = await appUpdateCheckPromise;
@@ -4423,6 +5904,17 @@ async function downloadAndPrepareAppUpdate() {
     setNativeAppUpdateState({ phase: 'error', error: support.reason || 'unsupported-platform', progress: null });
     return deriveAppUpdateState();
   }
+  // Same ownership rule as the check path, and one more: a spent attempt can never
+  // be installed by this process either, so re-entering the download lifecycle
+  // rebuilds MacUpdater's local proxy while the listener the first quitAndInstall()
+  // attached is still on the native updater. The renderer stops offering this and
+  // the automatic downloader stands down, but neither of those is the boundary --
+  // this is, and an IPC action queued before the attempt ended still arrives here.
+  //
+  // Every entry point uses the same rule, for the same reason (see
+  // runAppUpdateCheck): while the guard holds anything, nothing else drives the
+  // updater.
+  if (updateInstallQuit.isOutstanding()) return deriveAppUpdateState();
   if (appUpdateCheckPromise) await appUpdateCheckPromise;
   if (appUpdateNativeBusy) return deriveAppUpdateState();
   const latest = settings?.appUpdate?.lastKnownLatest || null;
@@ -4460,17 +5952,52 @@ async function downloadAndPrepareAppUpdate() {
   return deriveAppUpdateState();
 }
 
-function installDownloadedAppUpdate() {
+async function installDownloadedAppUpdate() {
+  // The other half of the same rule. Refusing new operations during the install
+  // only holds the boundary if nothing was already running when it started, and a
+  // check begun a moment earlier would still be reporting on the shared event.
+  // Waiting rather than refusing, since this one is a button press: the checks
+  // below are read afterwards, when the update it is about to install is settled.
+  if (appUpdateCheckPromise) await appUpdateCheckPromise;
   const latest = settings?.appUpdate?.lastKnownLatest || null;
   if (!downloadedAppUpdateMatchesLatest({
     phase: appUpdateNativeState.phase,
     downloadedVersion: appUpdateNativeState.version,
     latest
   })) return deriveAppUpdateState();
-  quitRequested = true;
-  // isSilent: skip the NSIS installer UI on Windows so the update feels seamless
-  // (per-user install needs no elevation); isForceRunAfter relaunches the app.
-  autoUpdater.quitAndInstall(true, true);
+  // quitAndInstall goes through before-quit, and electron-updater owns the
+  // restart from there. Stand the forced exit down or the installer never runs.
+  // Refused while an earlier request is still outstanding, and permanently once an
+  // attempt is spent, so a second press can never stack install attempts.
+  if (!updateInstallQuit.request()) {
+    // Say so rather than leave a button that quietly does nothing: a spent attempt
+    // cannot be retried in this process at all.
+    if (updateInstallQuit.phase() === 'spent') {
+      setNativeAppUpdateState({
+        phase: 'error',
+        progress: null,
+        error: 'Update install was already attempted',
+        errorKind: 'attempt-spent'
+      });
+    }
+    return deriveAppUpdateState();
+  }
+  try {
+    // isSilent: skip the NSIS installer UI on Windows so the update feels seamless
+    // (per-user install needs no elevation); isForceRunAfter relaunches the app.
+    autoUpdater.quitAndInstall(true, true);
+  } catch (error) {
+    // The abort above ended the attempt this call had just made, so unlike the
+    // updater's own error handler there is nothing else this failure could belong
+    // to, and the same recovery applies.
+    updateInstallQuit.abort();
+    setNativeAppUpdateState({
+      phase: 'error',
+      progress: null,
+      error: error?.message || String(error || 'Update failed'),
+      errorKind: installFailureErrorKind({ spent: updateInstallQuit.isSpent() })
+    });
+  }
   return deriveAppUpdateState();
 }
 
@@ -4485,6 +6012,7 @@ function isAllowedExternalUrl(value) {
   if (parsed.hostname === 'github.com' && parsed.pathname.startsWith('/junhoyeo/tokscale')) return true;
   if (parsed.hostname === 'www.npmjs.com' && parsed.pathname.startsWith('/package/@tokscale/')) return true;
   if (parsed.hostname === 'github.com' && parsed.pathname.startsWith('/Javis603/token-monitor')) return true;
+  if (parsed.hostname === 'codex-resets.com' && (parsed.pathname === '' || parsed.pathname === '/')) return true;
   if (
     (parsed.hostname === 'javis-ai.com' || parsed.hostname === 'www.javis-ai.com')
     && (parsed.pathname === '/token-monitor' || parsed.pathname.startsWith('/token-monitor/'))
@@ -4500,6 +6028,9 @@ function isAllowedExternalUrl(value) {
   if (parsed.hostname === 'bigmodel.cn' || parsed.hostname === 'www.bigmodel.cn') return true;
   if (parsed.hostname === 'www.volcengine.com' || parsed.hostname === 'console.volcengine.com') return true;
   if (parsed.hostname === 'qoder.com' || parsed.hostname === 'www.qoder.com' || parsed.hostname === 'qoder.com.cn' || parsed.hostname === 'www.qoder.com.cn') return true;
+  if (parsed.hostname === 'trae.cn' || parsed.hostname === 'www.trae.cn') return true;
+  if (parsed.hostname === 'commandcode.ai' || parsed.hostname === 'www.commandcode.ai') return true;
+  if (parsed.hostname === 'dashboard.zed.dev') return true;
   if ((parsed.hostname === 'ollama.com' || parsed.hostname === 'www.ollama.com') && (parsed.pathname === '/settings' || parsed.pathname === '/signin')) return true;
   if ((parsed.hostname === 'kimi.com' || parsed.hostname === 'www.kimi.com') && parsed.pathname.startsWith('/code')) return true;
   if (STATUS_PAGE_HOSTS.has(parsed.hostname) && (parsed.pathname === '' || parsed.pathname === '/')) return true;
@@ -4588,13 +6119,19 @@ function createWindow(boundsOverride, options = {}) {
     resizable: !collapsedFloatingBubble,
     show: false,
     backgroundColor: '#00000000',
-    icon: APP_ICON_PATH,
-    skipTaskbar: collapsedFloatingBubble || Boolean(settings?.trayMode),
+    ...appWindowIcon(),
+    skipTaskbar: collapsedFloatingBubble || skipTaskbarForSettings(settings),
     ...(collapsedFloatingBubble ? { fullscreenable: false, maximizable: false, minimizable: false } : {}),
     // Keeps a popover unmaximizable across rebuilds, which never re-run enterTrayMode().
     ...(settings?.trayMode ? { maximizable: false } : {}),
     ...floatingBubbleWindowChrome(process.platform, collapsedFloatingBubble),
-    ...(process.platform === 'darwin' && glass ? { vibrancy: 'hud', visualEffectState: 'active' } : {}),
+    // visualEffectState is construction-time only — Electron exposes no setter for
+    // it (verified: BrowserWindow has setVibrancy but no setVisualEffectState), and
+    // it is what keeps the material vibrant while the window is not key. Without
+    // it macOS falls back to followWindow and the glass greys out on blur. The
+    // vibrancy here is immediately re-evaluated by applyNativeMaterial() below, so
+    // a window that is not on screen still ends up with no material attached.
+    ...(process.platform === 'darwin' ? { vibrancy: 'hud', visualEffectState: 'active' } : {}),
     ...(process.platform === 'win32' && glass && !windowsAccent ? { backgroundMaterial: 'acrylic' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -4603,6 +6140,7 @@ function createWindow(boundsOverride, options = {}) {
     }
   });
   mainWindow = win;
+  mainWindowNativeBlurEnabled = null;
   mainWindowChrome = { collapsedFloatingBubble };
   applyMacSpaceBehavior();
   applyWindowsChrome(win, { round: true });
@@ -4640,19 +6178,22 @@ function createWindow(boundsOverride, options = {}) {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
   });
   applyWindowSettings();
+  attachNativeMaterialVisibility(win, () => mainWindowNativeBlurEnabled);
   applyNativeMaterial();
-  keepNativeBlurActive();
   win.on('focus', () => {
     stopFloatingBubbleAutoCollapseTimer();
-    keepNativeBlurActive();
   });
   win.on('blur', () => {
-    keepNativeBlurActive();
+    nudgeTaskbarZOrder();
     if (settings?.trayMode && !suppressNextBlurHide && !quitRequested) hidePopover();
     else if (!quitRequested) scheduleFloatingBubbleAutoCollapse();
   });
-  win.on('resized', persistBoundsSoon);
-  win.on('moved', persistBoundsSoon);
+  win.on('resized', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
+  win.on('moved', () => { persistBoundsSoon(); syncTaskbarZOrder(); });
+  win.on('show', syncTaskbarZOrder);
+  win.on('restore', syncTaskbarZOrder);
+  win.on('hide', stopTaskbarZOrderKeeper);
+  win.on('minimize', stopTaskbarZOrderKeeper);
   win.on('close', (event) => {
     if (quitRequested) return;
     const action = mainWindowCloseAction(settings, { platform: process.platform });
@@ -4666,7 +6207,23 @@ function createWindow(boundsOverride, options = {}) {
     }
   });
   win.webContents.on('before-input-event', handleZoomShortcut);
-  win.webContents.once('did-finish-load', sendFloatingBubbleState);
+  win.on('show', () => sendMainWindowVisibility(win));
+  win.on('hide', () => sendMainWindowVisibility(win));
+  win.on('minimize', () => sendMainWindowVisibility(win));
+  win.on('restore', () => sendMainWindowVisibility(win));
+  win.webContents.on('did-finish-load', () => {
+    sendFloatingBubbleState();
+    // Only report a window that is already on screen. A window still awaiting its
+    // reveal reports isVisible() === false, and loadWindowFile({ waitForContent })
+    // reveals it *because* the renderer painted real content — pushing "hidden"
+    // here stops that render, so the reveal could only come from the 2.5s
+    // fallback. Electron reports visibilityState 'visible' for a show:false
+    // window, which is the default the renderer keeps; trayMode instead seeds the
+    // hidden state through the windowHidden query flag. Keep this listener for
+    // later loads too: Cmd+Shift+R retains that query flag, so a visible tray
+    // window needs its native visibility resynced after every renderer reload.
+    if (win.isVisible()) sendMainWindowVisibility(win);
+  });
   loadWindowFile(win, {
     waitForContent: options.waitForContent === true,
     inactive: options.inactive === true,
@@ -4678,6 +6235,7 @@ function createWindow(boundsOverride, options = {}) {
         suppressInitialNumberAnimation: options.suppressInitialNumberAnimation === true,
         viewState: rendererViewState
       }),
+      ...(settings?.trayMode ? { windowHidden: '1' } : {}),
       ...(settings?.systemGlass === false ? { systemGlassDisabled: '1' } : {}),
       ...(windowsAccentFallback ? { windowsBackdropFallback: '1' } : {})
     }
@@ -4743,9 +6301,9 @@ function createDashboardWindow() {
     transparent: !(process.platform === 'win32' && glass),
     show: false,
     backgroundColor: '#00000000',
-    icon: APP_ICON_PATH,
+    ...appWindowIcon(),
     skipTaskbar: false,
-    ...(process.platform === 'darwin' && glass ? { vibrancy: 'hud', visualEffectState: 'active' } : {}),
+    ...(process.platform === 'darwin' ? { vibrancy: 'hud', visualEffectState: 'active' } : {}),
     ...(process.platform === 'win32' && glass ? { backgroundMaterial: 'acrylic' } : {}),
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -4754,7 +6312,10 @@ function createDashboardWindow() {
     }
   });
   dashboardWindow = win;
+  dashboardWindowNativeBlurEnabled = glass;
   applyWindowsChrome(win, { round: true });
+  attachNativeMaterialVisibility(win, () => dashboardWindowNativeBlurEnabled);
+  syncNativeMaterialVisibility(win, dashboardWindowNativeBlurEnabled);
   win.webContents.setWindowOpenHandler(({ url }) => {
     if (isAllowedExternalUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
@@ -4776,58 +6337,68 @@ function createDashboardWindow() {
   win.on('unresponsive', () => {
     if (!win.isVisible()) discardFailedDashboardWindow(win, 'renderer became unresponsive while opening');
   });
-  win.on('closed', () => { dashboardWindow = null; });
+  win.on('closed', () => {
+    dashboardWindow = null;
+    dashboardWindowNativeBlurEnabled = false;
+  });
   win.loadFile(path.join(__dirname, 'renderer', 'dashboard.html'))
     .catch((error) => discardFailedDashboardWindow(win, `load failed: ${error.message}`));
   return win;
 }
 
-async function getDashboardHistory() {
-  if (settings?.historyEnabled === false) return aggregateHistory([]);
-  if (mode === 'local') {
-    // The local collector keeps localDevice.history current (watch + interval
-    // ticks, with carry-forward), so read it directly — exactly as the hub
-    // branch reads /api/history. Forcing a full collection tick here made the
-    // fetch take seconds; on a quick close/reopen the response outlived the
-    // renderer and was dropped, stranding the dashboard on its empty state.
-    return aggregateHistory(localDevice ? [localDevice] : []);
-  }
-  if (settings.hubMode === 'host' && embeddedHub) {
-    // Host mode reads its own hub store in-process, so the dashboard history
-    // doesn't depend on a loopback fetch the local firewall/proxy might block.
-    return embeddedHub.hub.getHistory();
-  }
-  const { url: hubUrl, secret } = effectiveHubConfig();
-  if (!hubUrl) return aggregateHistory([]);
-  const url = `${hubUrl.replace(/\/$/, '')}/api/history`;
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
-  try {
-    const response = await fetch(url, {
-      headers: secret ? { authorization: `Bearer ${secret}` } : {},
-      signal: controller.signal
-    });
-    if (!response.ok) throw new Error(`Hub ${response.status}: ${(await response.text()).slice(0, 200)}`);
-    return response.json();
-  } finally {
-    clearTimeout(timeout);
-  }
+async function getDashboardHistory(options = {}) {
+  const includeDevices = options?.includeDevices === true;
+  const resolved = includeDevices
+    ? await resolveCompleteHistoryWithDevices(historyResolverOptions())
+    : { history: await getCompleteHistory(), deviceHistories: undefined };
+  const history = resolved.history;
+  const source = completeHistorySource(historyResolverOptions());
+  return {
+    ...history,
+    ...(includeDevices ? { deviceHistories: resolved.deviceHistories } : {}),
+    fixedPeriods: fixedPeriodHistoryMeta({
+      source
+    })
+  };
 }
 
 let cursorStatusCache = { value: null, at: 0 };
 let opencodeStatusCache = { value: null, at: 0 };
 const CURSOR_STATUS_TTL_MS = 30 * 1000;
+const CURSOR_EXTERNAL_AGENT_ERROR = 'Stop the headless agent before managing Cursor accounts.';
 
 function normalizeManualCookie(input) {
-  let s = String(input || '').trim();
-  if (!s) return '';
-  if (s.toLowerCase().startsWith('cookie:')) s = s.slice(7).trim();
-  // If they pasted the full cookie header, extract the WorkosCursorSessionToken= value.
-  const match = s.match(/WorkosCursorSessionToken=([^;\s]+)/);
-  if (match) return match[1];
-  // Otherwise assume the whole string is the raw token value.
-  if (/\s/.test(s)) return '';
-  return s;
+  return cursorAuth.normalizeCursorSessionToken(input);
+}
+
+async function cursorStatusValue({ discover = false } = {}) {
+  const managementBlocked = isExternalAgentActive();
+  let accounts = cursorAuth.listAccounts();
+  if (discover && !managementBlocked) {
+    try { await cursorAuth.runCursorDiscover(); } catch (_) { /* signed-out or unavailable Cursor app */ }
+    accounts = cursorAuth.listAccounts();
+  }
+  const disabled = new Set(normalizeCursorDisabledAccountIds(settings?.cursorDisabledAccountIds));
+  const manual = new Set(normalizeCursorAccountIds(settings?.cursorManualAccountIds));
+  const safeAccounts = await Promise.all(accounts.map(async (account) => {
+    const probeResult = await cursorProbe.probe(account.sessionToken);
+    return {
+      id: account.id,
+      enabled: !disabled.has(account.id),
+      removable: manual.has(account.id),
+      email: probeResult.ok ? probeResult.user?.email || '' : '',
+      label: account.label || '',
+      membershipType: probeResult.ok ? probeResult.usage.membershipType || '' : '',
+      expired: !probeResult.ok && probeResult.error?.kind === 'unauthorized',
+      error: probeResult.ok ? '' : probeResult.error?.message || ''
+    };
+  }));
+  return {
+    loggedIn: safeAccounts.length > 0,
+    accounts: safeAccounts,
+    linkedCount: safeAccounts.filter((account) => account.enabled && !account.expired && !account.error).length,
+    managementBlocked
+  };
 }
 
 function rebuildWindow() {
@@ -4854,6 +6425,29 @@ function rebuildWindow() {
 app.whenReady().then(() => {
   if (process.platform === 'darwin' && app.dock) app.dock.setIcon(APP_ICON_PATH);
   ensureSettingsLoaded();
+  // Switching the OS between light and dark repaints the taskbar underneath an
+  // icon we have already handed to the shell, so the renderer has to recompose
+  // it — nothing else in the app would notice the change.
+  nativeTheme.on('updated', () => { void pushSystemUiThemeAfterChange(); });
+  const widgetRuntime = macWidgetRuntimeSupport({
+    platform: process.platform,
+    osRelease: process.platform === 'darwin' ? os.release() : ''
+  });
+  const widgetRuntimeSupported = widgetRuntime.supported;
+  const widgetRecoveryAbort = widgetRuntimeSupported ? new AbortController() : null;
+  const abortWidgetRecovery = () => widgetRecoveryAbort?.abort();
+  if (widgetRecoveryAbort) app.once('before-quit', abortWidgetRecovery);
+  const widgetRecovery = widgetRuntimeSupported
+    ? recoverMacWidgetLaunchServicesRegistration({
+      platform: process.platform,
+      runtimeSupported: true,
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+      userDataPath: app.getPath('userData'),
+      signal: widgetRecoveryAbort.signal,
+      logger: (message) => console.warn(message)
+    })
+    : Promise.resolve({ status: 'skipped', reason: widgetRuntime.reason });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     callback({
       responseHeaders: {
@@ -4868,9 +6462,18 @@ app.whenReady().then(() => {
   configureWindowToggleShortcut();
   cleanupStaleStaging().catch((error) => console.log(`[tokscale] staging cleanup failed: ${error.message}`));
   ensureTray();
+  if (pendingMacWidgetOpen) setImmediate(openMainWindowFromWidget);
   if (settings.trayMode) enterTrayMode();
   regenerateTokscalePricing();
+  if (widgetRuntimeSupported) ensureMacWidgetDemand();
   startMode();
+  void widgetRecovery.finally(() => {
+    if (widgetRecoveryAbort) app.removeListener('before-quit', abortWidgetRecovery);
+    if (!widgetRecoveryAbort?.signal.aborted) {
+      macWidgetPublicationReady = true;
+      macWidgetSnapshotController?.resume();
+    }
+  });
   void hydrateCodexManagedWorkspaceLabels();
   if (settings.discordRpcEnabled) startDiscordRpc();
   rateCache = readRateCache();
@@ -4931,10 +6534,12 @@ app.whenReady().then(() => {
     const previousDiscordRpcEnabled = settings.discordRpcEnabled;
     const previousShowTrayIcon = settings.showTrayIcon;
     const previousTrayMode = settings.trayMode;
+    const previousHideAppIcon = settings.hideAppIcon;
     const previousTrayContent = settings.trayContent;
     const previousTrayCustomLayout = JSON.stringify(settings.trayCustomLayout || {});
     const previousFloatingBubbleCustomLayout = JSON.stringify(settings.floatingBubbleCustomLayout || {});
     const previousShowTrayProviderBadge = settings.showTrayProviderBadge;
+    const previousOpenCodeLocalLimitsEnabled = settings.opencodeLocalLimitsEnabled === true;
     const previousCurrency = settings.currency;
     const previousCompactTokenUnits = settings.compactTokenUnits;
     const previousLanguage = settings.language;
@@ -4945,7 +6550,16 @@ app.whenReady().then(() => {
     const normalizedPatch = { ...patch, currency: normalizedCurrency };
     delete normalizedPatch.windowMaximized;
     delete normalizedPatch.codexManagedAccounts;
+    delete normalizedPatch.antigravityManagedAccounts;
     delete normalizedPatch.mimoManagedAccounts;
+    delete normalizedPatch.workbuddyAccessToken;
+    delete normalizedPatch.workbuddyUserId;
+    delete normalizedPatch.workbuddyEnterpriseId;
+    delete normalizedPatch.workbuddyEndpoint;
+    delete normalizedPatch.workbuddyLocale;
+    delete normalizedPatch.workbuddyDomain;
+    delete normalizedPatch.workbuddyDepartmentInfo;
+    delete normalizedPatch.workbuddyLocalAppEnabled;
     delete normalizedPatch.openrouterProfiles;
     delete normalizedPatch.thirdPartyProfiles;
     delete normalizedPatch.customModelPricing;
@@ -4977,8 +6591,15 @@ app.whenReady().then(() => {
     if (patch.volcengineAccessKeyId !== undefined) normalizedPatch.volcengineAccessKeyId = normalizeSecretSetting(patch.volcengineAccessKeyId);
     if (patch.volcengineSecretAccessKey !== undefined) normalizedPatch.volcengineSecretAccessKey = normalizeSecretSetting(patch.volcengineSecretAccessKey);
     if (patch.volcengineRegion !== undefined) normalizedPatch.volcengineRegion = normalizeVolcengineRegion(patch.volcengineRegion);
+    if (patch.volcengineAgentAccessKeyId !== undefined) normalizedPatch.volcengineAgentAccessKeyId = normalizeSecretSetting(patch.volcengineAgentAccessKeyId);
+    if (patch.volcengineAgentSecretAccessKey !== undefined) normalizedPatch.volcengineAgentSecretAccessKey = normalizeSecretSetting(patch.volcengineAgentSecretAccessKey);
+    if (patch.volcengineAgentRegion !== undefined) normalizedPatch.volcengineAgentRegion = normalizeVolcengineRegion(patch.volcengineAgentRegion);
     if (patch.qoderCookie !== undefined) normalizedPatch.qoderCookie = normalizeQoderCookie(patch.qoderCookie);
     if (patch.qoderSite !== undefined) normalizedPatch.qoderSite = normalizeQoderSite(patch.qoderSite);
+    if (patch.traeAccessToken !== undefined) normalizedPatch.traeAccessToken = normalizeTraeAccessToken(patch.traeAccessToken);
+    if (patch.traeDeviceId !== undefined) normalizedPatch.traeDeviceId = normalizeTraeDeviceId(patch.traeDeviceId);
+    if (patch.zedCookie !== undefined) normalizedPatch.zedCookie = normalizeZedCookie(patch.zedCookie);
+    if (patch.commandcodeCookie !== undefined) normalizedPatch.commandcodeCookie = normalizeCommandcodeCookie(patch.commandcodeCookie);
     if (patch.kimiApiKey !== undefined) normalizedPatch.kimiApiKey = normalizeKimiApiKey(patch.kimiApiKey);
     if (patch.kimiWebAccessToken !== undefined) normalizedPatch.kimiWebAccessToken = normalizeKimiWebAccessToken(patch.kimiWebAccessToken);
     if (patch.ollamaCookie !== undefined) normalizedPatch.ollamaCookie = normalizeOllamaCookie(patch.ollamaCookie);
@@ -5006,6 +6627,12 @@ app.whenReady().then(() => {
       titleIconOnly: parseBoolean(patch.titleIconOnly ?? settings.titleIconOnly, false),
       showCompactTotalTokens: parseBoolean(patch.showCompactTotalTokens ?? settings.showCompactTotalTokens, false),
       compactTokenUnits: normalizeCompactTokenUnits(patch.compactTokenUnits ?? settings.compactTokenUnits),
+      interfaceFontFamily: fontSettingsApi.normalizeFontFamily(
+        patch.interfaceFontFamily ?? settings.interfaceFontFamily
+      ),
+      displayFontFamily: fontSettingsApi.normalizeFontFamily(
+        patch.displayFontFamily ?? settings.displayFontFamily
+      ),
       tokenRateMode: normalizeTokenRateMode(patch.tokenRateMode ?? settings.tokenRateMode),
       floatingBubbleEnabled: parseBoolean(patch.floatingBubbleEnabled ?? settings.floatingBubbleEnabled, false),
       discordRpcEnabled: patch.discordRpcEnabled ?? settings.discordRpcEnabled ?? false,
@@ -5040,6 +6667,8 @@ app.whenReady().then(() => {
       homeLimitProviderOrder: patch.homeLimitProviderOrder !== undefined ? migrateHomeLimitProviderOrder(patch.homeLimitProviderOrder) : (settings.homeLimitProviderOrder || ''),
       hiddenHomeLimitProviders: patch.hiddenHomeLimitProviders !== undefined ? normalizeHiddenLimitProviders(patch.hiddenHomeLimitProviders) : normalizeHiddenLimitProviders(settings.hiddenHomeLimitProviders),
       homeLimitAccountCount: normalizeHomeLimitAccountCount(patch.homeLimitAccountCount ?? settings.homeLimitAccountCount),
+      periodMonthMode: normalizePeriodMonthMode(patch.periodMonthMode ?? settings.periodMonthMode),
+      modelRankingMetric: normalizeRankingMetric(patch.modelRankingMetric ?? settings.modelRankingMetric),
       historyEnabled: parseBoolean(patch.historyEnabled ?? settings.historyEnabled, false),
       projectsEnabled: parseBoolean(patch.projectsEnabled ?? settings.projectsEnabled, true),
       historyIntervalMs: normalizeHistoryIntervalMs(patch.historyIntervalMs ?? settings.historyIntervalMs),
@@ -5051,16 +6680,23 @@ app.whenReady().then(() => {
       serviceProviderDisplayOrder: patch.serviceProviderDisplayOrder !== undefined ? String(patch.serviceProviderDisplayOrder || '') : (settings.serviceProviderDisplayOrder || ''),
       hiddenServiceProviders: patch.hiddenServiceProviders !== undefined ? String(patch.hiddenServiceProviders || '') : (settings.hiddenServiceProviders || ''),
       serviceStatusRefreshMs: normalizeServiceStatusRefreshMs(patch.serviceStatusRefreshMs ?? settings.serviceStatusRefreshMs),
+      limitsRefreshMode: normalizeLimitsRefreshMode(patch.limitsRefreshMode ?? settings.limitsRefreshMode),
       limitsRefreshMs: normalizeLimitsRefreshMs(patch.limitsRefreshMs ?? settings.limitsRefreshMs),
       showLimitSource: parseBoolean(patch.showLimitSource ?? settings.showLimitSource, false),
       maskLimitAccountEmails: parseBoolean(patch.maskLimitAccountEmails ?? settings.maskLimitAccountEmails, false),
       claudePrepaidBalanceEnabled: parseBoolean(patch.claudePrepaidBalanceEnabled ?? settings.claudePrepaidBalanceEnabled, true),
+      codexResetForecastEnabled: parseBoolean(patch.codexResetForecastEnabled ?? settings.codexResetForecastEnabled, false),
+      showCodexAdditionalLimits: parseBoolean(patch.showCodexAdditionalLimits ?? settings.showCodexAdditionalLimits, true),
+      opencodeAmbientEnabled: parseBoolean(patch.opencodeAmbientEnabled ?? settings.opencodeAmbientEnabled, true),
+      opencodeLocalLimitsEnabled: parseBoolean(patch.opencodeLocalLimitsEnabled ?? settings.opencodeLocalLimitsEnabled, false),
       showLimitUsed: parseBoolean(patch.showLimitUsed ?? settings.showLimitUsed, false),
+      keepAboveTaskbar: parseBoolean(patch.keepAboveTaskbar ?? settings.keepAboveTaskbar, false),
       windowMaximized: parseBoolean(settings.windowMaximized, false),
       zoomFactor: clampZoom(patch.zoomFactor ?? settings.zoomFactor),
       ...normalizeTrayModeSettings({
         showTrayIcon: patch.showTrayIcon ?? settings.showTrayIcon,
-        trayMode: patch.trayMode ?? settings.trayMode
+        trayMode: patch.trayMode ?? settings.trayMode,
+        hideAppIcon: patch.hideAppIcon ?? settings.hideAppIcon
       }),
       trayContent: normalizeTrayContent(patch.trayContent ?? settings.trayContent),
       trayCustomLayout: normalizeTrayLayout(patch.trayCustomLayout ?? settings.trayCustomLayout),
@@ -5088,13 +6724,20 @@ app.whenReady().then(() => {
       volcengineAccessKeyId: patch.volcengineAccessKeyId !== undefined ? normalizeSecretSetting(patch.volcengineAccessKeyId) : (settings.volcengineAccessKeyId || ''),
       volcengineSecretAccessKey: patch.volcengineSecretAccessKey !== undefined ? normalizeSecretSetting(patch.volcengineSecretAccessKey) : (settings.volcengineSecretAccessKey || ''),
       volcengineRegion: patch.volcengineRegion !== undefined ? normalizeVolcengineRegion(patch.volcengineRegion) : (settings.volcengineRegion || ''),
+      volcengineAgentAccessKeyId: patch.volcengineAgentAccessKeyId !== undefined ? normalizeSecretSetting(patch.volcengineAgentAccessKeyId) : (settings.volcengineAgentAccessKeyId || ''),
+      volcengineAgentSecretAccessKey: patch.volcengineAgentSecretAccessKey !== undefined ? normalizeSecretSetting(patch.volcengineAgentSecretAccessKey) : (settings.volcengineAgentSecretAccessKey || ''),
+      volcengineAgentRegion: patch.volcengineAgentRegion !== undefined ? normalizeVolcengineRegion(patch.volcengineAgentRegion) : (settings.volcengineAgentRegion || ''),
       qoderCookie: patch.qoderCookie !== undefined ? normalizeQoderCookie(patch.qoderCookie) : (settings.qoderCookie || ''),
       qoderSite: patch.qoderSite !== undefined ? normalizeQoderSite(patch.qoderSite) : normalizeQoderSite(settings.qoderSite || 'global'),
+      traeAccessToken: patch.traeAccessToken !== undefined ? normalizeTraeAccessToken(patch.traeAccessToken) : (settings.traeAccessToken || ''),
+      traeDeviceId: patch.traeDeviceId !== undefined ? normalizeTraeDeviceId(patch.traeDeviceId) : (settings.traeDeviceId || ''),
+      zedCookie: patch.zedCookie !== undefined ? normalizeZedCookie(patch.zedCookie) : (settings.zedCookie || ''),
+      commandcodeCookie: patch.commandcodeCookie !== undefined ? normalizeCommandcodeCookie(patch.commandcodeCookie) : (settings.commandcodeCookie || ''),
       ollamaCookie: patch.ollamaCookie !== undefined ? normalizeOllamaCookie(patch.ollamaCookie) : (settings.ollamaCookie || ''),
       customModelPricing: patch.customModelPricing !== undefined
         ? normalizeCustomPricingSetting(patch.customModelPricing)
         : normalizeCustomPricingSetting(settings.customModelPricing)
-    }, normalizedPatch);
+    }, windowBehaviorSelection(normalizedPatch));
     settings.archivedClientUsage = normalizeArchivedClientUsage(settings.archivedClientUsage);
     if (settings.clients !== previousClients) updateArchivedClientUsage(previousClients, settings.clients);
     delete settings.edgeDrawerEnabled;
@@ -5104,6 +6747,7 @@ app.whenReady().then(() => {
       settings = previousSettingsState;
       throw error;
     }
+    if (patch?.limitProviders !== undefined) initialLimitProvidersPending = false;
     if (JSON.stringify(settings.customModelPricing || []) !== previousCustomModelPricing) {
       regenerateTokscalePricing();
       refreshAfterPricingChange();
@@ -5139,18 +6783,25 @@ app.whenReady().then(() => {
       applyNativeMaterial();
     }
     const runtimeChange = classifySettingsChange(previousRuntimeSettings, settings);
+    const widgetHistorySourceChanged = previousRuntimeSettings.historyEnabled !== settings.historyEnabled;
+    if (widgetHistorySourceChanged && !runtimeChange.modeStructural) {
+      refreshMacWidgetHistorySource();
+    }
     const limitInvalidations = settingsLimitInvalidationPlan(runtimeChange);
     if (runtimeChange.modeStructural) {
       for (const { scope, reason, options } of limitInvalidations) {
         rememberPendingLimitInvalidation(scope, reason, options);
       }
       startMode();
-    } else if (runtimeChange.usageStructural || runtimeChange.sinkStructural) {
+    } else if (runtimeChange.sinkStructural) {
       for (const { scope, reason, options } of limitInvalidations) {
         rememberPendingLimitInvalidation(scope, reason, options);
       }
       restartDeviceRuntimeForMode();
     } else {
+      if (runtimeChange.usageStructural) {
+        reconfigureUsageRuntimeForMode();
+      }
       if (runtimeChange.limitsReconfigure && deviceRuntimeHandle) {
         deviceRuntimeHandle.reconfigureLimits(electronLimitsConfig());
       }
@@ -5178,11 +6829,21 @@ app.whenReady().then(() => {
     ) {
       updateTrayDisplay();
     }
+    // enterTrayMode()/exitTrayMode() already re-apply the policy; this covers a
+    // hideAppIcon flip on its own, which is the only other input to it.
+    if (settings.hideAppIcon !== previousHideAppIcon && settings.trayMode === previousTrayMode) {
+      applyMacActivationPolicy();
+    }
     if (patch.currency !== undefined || patch.currencyRates !== undefined) {
       applyEffectiveRates();               // sync: settingsForRenderer() below sees fresh effective map
       updateTrayDisplay();
       if (settings.discordRpcEnabled && latestStats) updateDiscordRpcDisplay(latestStats);
       refreshExchangeRates();              // async: fetch if stale, then re-push
+    }
+    if ((settings.opencodeLocalLimitsEnabled === true) !== previousOpenCodeLocalLimitsEnabled) {
+      // Re-project the cached aggregate immediately. The Hub can be offline and
+      // therefore may not send another frame after this local-only setting changes.
+      refreshLimitStatsPresentation();
     }
     pushSettingsToRenderer();
     return settingsForRenderer();
@@ -5285,8 +6946,16 @@ app.whenReady().then(() => {
       const img = nativeImage.createFromDataURL(dataUrl);
       if (img.isEmpty()) continue;
       // Resize by height only; aspect ratio is preserved, so wide bar-style
-      // icons keep their width while square provider icons stay 20x20.
-      const sized = img.resize({ height: 20, quality: 'best' });
+      // icons keep their width while square provider icons stay square.
+      // Windows targets its own small-icon metric (16px x the display scale
+      // factor) rather than the macOS menubar height, so a single high-quality
+      // downscale of the 44px-tall renderer source stays crisp in the
+      // notification area instead of the old fixed 20px-for-all blur, and its
+      // square cell gets the bitmap trimmed to the pixels the renderer drew.
+      const sized = prepareTrayIconForPlatform(img, {
+        platform: process.platform,
+        scaleFactor: screen.getPrimaryDisplay().scaleFactor
+      });
       if (shouldUseTemplateTrayIcon(id, process.platform, settings?.showTrayProviderBadge)) sized.setTemplateImage(true);
       providerTrayIcons[id] = sized;
     }
@@ -5298,7 +6967,7 @@ app.whenReady().then(() => {
     // The stream normally carries the stamp, but it is precisely when the stream
     // is down that this read is the only thing still arriving from the hub.
     maybeAdoptSharedSubscriptionRevision(stats);
-    return stats;
+    return electronPresentationStats(stats);
   });
   ipcMain.handle('export:now', async () => {
     const result = await dialog.showOpenDialog({
@@ -5328,7 +6997,14 @@ app.whenReady().then(() => {
     force: Boolean(options?.force),
     providerIds: Array.isArray(options?.providerIds) ? options.providerIds : null
   }));
+  ipcMain.handle('codexResetForecast:get', (_event, options) => {
+    if (settings?.codexResetForecastEnabled !== true) {
+      return { status: 'disabled', checkedAt: new Date().toISOString() };
+    }
+    return codexResetForecastClient.getForecast({ force: Boolean(options?.force) });
+  });
   ipcMain.handle('hub:getInfo', () => getHubInfo());
+  ipcMain.handle('hub:getBuildStatus', () => getHubBuildStatus());
   ipcMain.handle('hub:regenerateSecret', () => {
     settings.hubHostSecret = generateHubSecret();
     saveSettings({ throwOnError: true });
@@ -5346,58 +7022,61 @@ app.whenReady().then(() => {
     homeDir: require('os').homedir(),
     sharedDataDir: sharedDataDir(),
     loginItemSupported: loginItemEnabledHere(),
-    loginItemOpenAtLogin: currentLoginItemState()
+    loginItemOpenAtLogin: currentLoginItemState(),
+    systemDarkUi: currentSystemDarkTrayUi()
   }));
-  // Where each tracked tool's data is read from on THIS machine. The absolute
+  ipcMain.handle('diagnostics:generate', async () => {
+    const report = await diagnosticReportGenerator.generate();
+    return {
+      generatedAt: report.generatedAt,
+      completeness: report.completeness,
+      text: report.text,
+      bytes: report.bytes,
+      truncated: report.truncated,
+      includedClientCount: report.includedClientCount,
+      omittedClientCount: report.omittedClientCount,
+      includedLimitProviderCount: report.includedLimitProviderCount,
+      omittedLimitProviderCount: report.omittedLimitProviderCount,
+      includedRemoteGroupCount: report.includedRemoteGroupCount,
+      omittedRemoteGroupCount: report.omittedRemoteGroupCount,
+      includedJournalEventCount: report.includedJournalEventCount,
+      journalOmittedCount: report.journalOmittedCount
+    };
+  });
+  // Where each known tool's data is read from on THIS machine. The absolute
   // paths stay local by design — they carry the user's home directory and never
   // go on the wire — so the renderer asks the main process for them instead.
   //
   // Probe only the client whose detail panel is open. The renderer caches the
-  // result for the current health snapshot, avoiding both eager filesystem work
-  // and path flicker when a stats tick rebuilds the panel.
-  ipcMain.handle('usage:clientSources', (_event, clientId) => {
-    const client = String(clientId || '').trim().toLowerCase();
-    const tracked = trackedClientSet(clientsCsvForSetting(settings?.clients));
-    if (!KNOWN_CLIENTS.split(',').includes(client) || !tracked.has(client)) return null;
-    try {
-      const seen = new Set();
-      const all = (clientDiagnosticRoots(client)[client] || [])
-        .filter((root) => {
-          const key = `${root.id}\0${root.dir}`;
-          return !seen.has(key) && seen.add(key);
-        })
-        .map((root) => ({ id: root.id, dir: root.dir, exists: root.exists === true }));
-      const sources = all.slice(0, 32);
-      return { sources, omittedCount: all.length - sources.length };
-    } catch (_) {
-      return null;
-    }
+  // result for the current health snapshot, or for the current device/client
+  // pair when the tool is not tracked, avoiding eager filesystem work.
+  const clientSourceIpcHandlers = createClientSourceIpcHandlers({
+    knownClients: KNOWN_CLIENTS,
+    trackedClients: () => trackedClientSet(clientsCsvForSetting(settings?.clients)),
+    visibleDiagnosticRoots,
+    clientDiagnosticRoots,
+    showItemInFolder: (target) => shell.showItemInFolder(target),
+    openPath: (target) => shell.openPath(target),
+    revealClientSyncLock: () => {
+      const lockPath = antigravitySyncLockPath(os.homedir());
+      if (!fs.existsSync(lockPath)) return false;
+      shell.showItemInFolder(lockPath);
+      return true;
+    },
+    canRunRescan: () => ownsUsageRuntime(),
+    rescanClient: (client) => refreshUsageClient(client, { forceSync: true }),
+    repairClientSyncLock: () => repairAntigravitySyncLock({
+      lockPath: antigravitySyncLockPath(os.homedir())
+    }),
+    onRescanError: (error) => console.log(`[usage-runtime] rescan failed: ${error.message}`)
   });
-  // Reveals one of those paths. The renderer sends a client id, never a path:
-  // anything it could send would otherwise become an arbitrary filesystem open.
-  ipcMain.handle('usage:revealClientSource', async (_event, clientId) => {
-    const client = String(clientId || '').trim().toLowerCase();
-    const tracked = trackedClientSet(clientsCsvForSetting(settings?.clients));
-    if (!KNOWN_CLIENTS.split(',').includes(client) || !tracked.has(client)) return false;
-    try {
-      const roots = clientDiagnosticRoots(client)[client] || [];
-      const target = roots.find((root) => root.exists);
-      if (!target) return false;
-      return await shell.openPath(target.dir) === '';
-    } catch (_) {
-      return false;
-    }
-  });
-  ipcMain.handle('usage:rescanClient', async (_event, clientId) => {
-    const client = String(clientId || '').trim().toLowerCase();
-    if (!client || !ownsUsageRuntime()) return false;
-    try {
-      return await refreshUsageClient(client, { forceSync: true }) === true;
-    } catch (error) {
-      console.log(`[usage-runtime] rescan failed: ${error.message}`);
-      return false;
-    }
-  });
+  ipcMain.handle('usage:clientSources', (_event, clientId) => clientSourceIpcHandlers.clientSources(clientId));
+  // The renderer sends a client id, never a path: anything it could send would
+  // otherwise become an arbitrary filesystem open.
+  ipcMain.handle('usage:revealClientSource', (_event, clientId) => clientSourceIpcHandlers.revealClientSource(clientId));
+  ipcMain.handle('usage:revealClientSyncLock', (_event, clientId) => clientSourceIpcHandlers.revealClientSyncLock(clientId));
+  ipcMain.handle('usage:rescanClient', (_event, clientId) => clientSourceIpcHandlers.rescanClient(clientId));
+  ipcMain.handle('usage:repairClientSyncLock', (_event, clientId) => clientSourceIpcHandlers.repairClientSyncLock(clientId));
   ipcMain.handle('clipboard:write', (_event, text) => {
     clipboard.writeText(String(text || ''));
     return true;
@@ -5409,6 +7088,11 @@ app.whenReady().then(() => {
       .catch((error) => ({ ok: false, error: error.message }));
   });
   ipcMain.handle('app:openUserData', () => shell.openPath(app.getPath('userData')));
+  ipcMain.handle('antigravity:accounts', () => antigravityAccountsForRenderer());
+  ipcMain.handle('antigravity:addAccount', () => addAntigravityManagedAccount());
+  ipcMain.handle('antigravity:cancelLogin', () => cancelAntigravityManagedAccountLogin());
+  ipcMain.handle('antigravity:setAccountEnabled', (_event, id, enabled) => setAntigravityManagedAccountEnabled(id, enabled));
+  ipcMain.handle('antigravity:removeAccount', (_event, id) => removeAntigravityManagedAccount(id));
   ipcMain.handle('mimo:accounts', () => mimoAccountsForRenderer());
   ipcMain.handle('mimo:addAccount', (_event, cookieHeader) => addMimoManagedAccount(cookieHeader));
   ipcMain.handle('mimo:openConsole', () => shell.openExternal(MIMO_PLATFORM_CONSOLE_URL)
@@ -5431,16 +7115,31 @@ app.whenReady().then(() => {
   ipcMain.handle('appUpdate:install', () => installDownloadedAppUpdate());
   ipcMain.handle('appUpdate:dismiss', (_event, version) => dismissAppUpdateVersion(version));
   ipcMain.handle('cursor:loginManual', async (_event, raw) => {
+    if (isExternalAgentActive()) {
+      return { ok: false, code: 'EXTERNAL_AGENT_ACTIVE', error: CURSOR_EXTERNAL_AGENT_ERROR };
+    }
     const token = normalizeManualCookie(raw);
     if (!token) return { ok: false, error: 'Empty or malformed token' };
     try {
       const probeResult = await cursorProbe.probe(token);
       if (!probeResult.ok) return { ok: false, error: probeResult.error?.message || 'Cursor rejected the token' };
-      await cursorAuth.runCursorLogin(token);
+      const accountId = await cursorAuth.runCursorLogin(token);
+      const disabled = normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds)
+        .filter((id) => id !== accountId);
+      const limitsChanged = disabled.length !== settings.cursorDisabledAccountIds.length;
+      settings.cursorDisabledAccountIds = disabled;
+      settings.cursorManualAccountIds = normalizeCursorAccountIds([
+        ...settings.cursorManualAccountIds,
+        accountId
+      ]);
+      saveSettings({ throwOnError: true });
+      if (limitsChanged) {
+        deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
+      }
       cursorStatusCache = { value: null, at: 0 };
       void queueLimitInvalidation({ provider: 'cursor' }, 'login', { clear: true });
       bestEffortTrackedUsageRefresh('cursor', { forceSync: true });
-      return { ok: true, email: probeResult.user.email };
+      return { ok: true, email: probeResult.user.email, status: await cursorStatusValue() };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -5507,7 +7206,7 @@ app.whenReady().then(() => {
   ipcMain.handle('ollama:validateCookie', async (_event, raw) => {
     const cookie = normalizeOllamaCookie(raw);
     if (!cookie) return { ok: false, status: 'notConfigured' };
-    const provider = await fetchOllamaLimits({ ollamaCookie: cookie }, { bypassValidationCache: true });
+    const provider = await fetchOllamaLimits({ ollamaCookie: cookie }, electronProviderDeps({ bypassValidationCache: true }));
     rememberOllamaValidation(cookie, provider);
     return { ok: provider.status === 'ok', status: provider.status };
   });
@@ -5527,8 +7226,8 @@ app.whenReady().then(() => {
     }
     try {
       const [go, zen] = await Promise.all([
-        opencodeWeb.fetchGoWeb(cookie, {}),
-        opencodeWeb.fetchZen(cookie, {})
+        opencodeWeb.fetchGoWeb(cookie, electronProviderDeps()),
+        opencodeWeb.fetchZen(cookie, electronProviderDeps())
       ]);
       if (opencodeWeb.summarizeLink(go, zen).expired) {
         return { ok: false, error: 'OpenCode rejected the cookie (it may be expired)' };
@@ -5545,13 +7244,49 @@ app.whenReady().then(() => {
       return { ok: false, error: err.message };
     }
   });
-  ipcMain.handle('cursor:logout', async () => {
+  ipcMain.handle('cursor:setAccountEnabled', async (_event, accountId, enabled) => {
     try {
-      await cursorAuth.runCursorLogout();
+      const id = String(accountId || '').trim();
+      if (!id || !cursorAuth.listAccounts().some((account) => account.id === id)) {
+        return { ok: false, error: 'Cursor account not found' };
+      }
+      const disabled = new Set(normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds));
+      if (enabled) disabled.delete(id);
+      else disabled.add(id);
+      settings.cursorDisabledAccountIds = [...disabled];
+      saveSettings({ throwOnError: true });
+      cursorStatusCache = { value: null, at: 0 };
+      deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
+      void queueLimitInvalidation({ provider: 'cursor' }, 'account-toggle', { clear: true });
+      return { ok: true, status: await cursorStatusValue() };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  });
+  ipcMain.handle('cursor:logout', async (_event, accountId) => {
+    if (isExternalAgentActive()) {
+      return { ok: false, code: 'EXTERNAL_AGENT_ACTIVE', error: CURSOR_EXTERNAL_AGENT_ERROR };
+    }
+    try {
+      const removeId = String(accountId || '').trim();
+      const manual = new Set(normalizeCursorAccountIds(settings.cursorManualAccountIds));
+      if (!removeId || !manual.has(removeId)) {
+        return { ok: false, error: 'Only manually added Cursor accounts can be removed' };
+      }
+      await cursorAuth.runCursorLogout({ accountId: removeId });
+      const disabled = normalizeCursorDisabledAccountIds(settings.cursorDisabledAccountIds)
+        .filter((id) => id !== removeId);
+      const limitsChanged = disabled.length !== settings.cursorDisabledAccountIds.length;
+      settings.cursorDisabledAccountIds = disabled;
+      settings.cursorManualAccountIds = [...manual].filter((id) => id !== removeId);
+      saveSettings({ throwOnError: true });
+      if (limitsChanged) {
+        deviceRuntimeHandle?.reconfigureLimits(electronLimitsConfig());
+      }
       cursorStatusCache = { value: null, at: 0 };
       void queueLimitInvalidation({ provider: 'cursor' }, 'logout', { clear: true });
       bestEffortTrackedUsageRefresh('cursor', { forceSync: true });
-      return { ok: true };
+      return { ok: true, status: await cursorStatusValue() };
     } catch (err) {
       return { ok: false, error: err.message };
     }
@@ -5568,27 +7303,12 @@ app.whenReady().then(() => {
       return { ok: false, error: err.message };
     }
   });
-  ipcMain.handle('cursor:status', async () => {
+  ipcMain.handle('cursor:status', async (_event, options = {}) => {
     const now = Date.now();
-    if (cursorStatusCache.value && now - cursorStatusCache.at < CURSOR_STATUS_TTL_MS) {
+    if (options?.force !== true && options?.discover !== true && cursorStatusCache.value && now - cursorStatusCache.at < CURSOR_STATUS_TTL_MS) {
       return cursorStatusCache.value;
     }
-    const account = cursorAuth.readActiveAccount();
-    if (!account) {
-      const value = { loggedIn: false };
-      cursorStatusCache = { value, at: now };
-      return value;
-    }
-    const probeResult = await cursorProbe.probe(account.sessionToken);
-    const value = probeResult.ok
-      ? {
-          loggedIn: true,
-          email: probeResult.user.email,
-          membershipType: probeResult.usage.membershipType,
-          billingCycleEnd: probeResult.usage.billingCycleEnd,
-          expired: false
-        }
-      : { loggedIn: true, expired: probeResult.error?.kind === 'unauthorized', error: probeResult.error?.message };
+    const value = await cursorStatusValue({ discover: options?.discover === true });
     cursorStatusCache = { value, at: now };
     return value;
   });
@@ -5598,16 +7318,77 @@ app.whenReady().then(() => {
       return opencodeStatusCache.value;
     }
     const profiles = settings.opencodeProfiles || {};
-    const entries = Object.entries(profiles).filter(([, p]) => p.cookie && p.enabled);
+    // A profile that only names the auto-detected key stores no credential of
+    // its own, so filtering on `cookie || apiKey` alone would skip it and leave
+    // its row stuck on the placeholder while the collector reads live quota
+    // from that very key. Resolve the key the same way the collector does.
+    const ambientKey = opencodeGoApi.readGoApiKey(process.env);
+    const ambientIdentity = ambientKey ? opencodeGoApi.goApiIdentity(ambientKey) : '';
+    const profileKey = (p) => p.apiKey || opencodeProfiles.ambientKeyFor(p, ambientKey, ambientIdentity);
+    // A reference that no longer resolves still has to answer for its row. It
+    // has a credential the user stored, so filtering it out here would leave the
+    // row on its placeholder forever with nothing saying what to do about it.
+    const needsRebind = (p) => Boolean(p.useAmbientKey) && !profileKey(p) && !p.cookie;
+    const entries = Object.entries(profiles)
+      .filter(([, p]) => (p.cookie || profileKey(p) || needsRebind(p)) && p.enabled);
 
     // Query all profiles in parallel
     const results = await Promise.all(
       entries.map(async ([name, profile]) => {
-        const [go, zen] = await Promise.all([
-          opencodeWeb.fetchGoWeb(profile.cookie, {}),
-          opencodeWeb.fetchZen(profile.cookie, {})
+        const apiKey = profileKey(profile);
+        if (needsRebind(profile)) {
+          return [name, {
+            linked: false,
+            expired: false,
+            go: false,
+            zen: false,
+            hasBalance: false,
+            balanceUsd: null,
+            needsRebind: true
+          }];
+        }
+        // An API key reaches Go quota and nothing else, so it reports the same
+        // shape as a cookie with the Zen half permanently absent. Without this
+        // branch an API account is never probed and the panel sits at "0/1".
+        // Only a cookie account can be probed for Zen, so a profile holding both
+        // falls through to the cookie path and its key is used by the collector.
+        if (apiKey && !profile.cookie) {
+          const probe = await probeOpenCodeApiKey(apiKey);
+          // The renderer checks `linked` before `error`, so anything short of a
+          // working key must not claim linked or it renders a bare "✓" with no
+          // plan behind it.
+          if (probe.status === 'ok') {
+            return [name, { linked: true, expired: false, go: true, zen: false, hasBalance: false, balanceUsd: null }];
+          }
+          if (probe.status === 'unauthorized') {
+            return [name, { linked: true, expired: true, go: false, zen: false, hasBalance: false, balanceUsd: null }];
+          }
+          return [name, {
+            linked: false,
+            expired: false,
+            go: false,
+            zen: false,
+            hasBalance: false,
+            balanceUsd: null,
+            error: probe.status
+          }];
+        }
+        const [go, zen, apiProbe] = await Promise.all([
+          opencodeWeb.fetchGoWeb(profile.cookie, electronProviderDeps()),
+          opencodeWeb.fetchZen(profile.cookie, electronProviderDeps()),
+          apiKey ? probeOpenCodeApiKey(apiKey) : null
         ]);
-        return [name, { ...opencodeWeb.summarizeLink(go, zen), balanceUsd: zen.balanceUsd }];
+        const summary = { ...opencodeWeb.summarizeLink(go, zen), balanceUsd: zen.balanceUsd };
+        // A bound key answers for Go on its own, so the row must not read as
+        // expired just because the cookie half died: the collector still has
+        // quota, and only the Zen balance is actually missing.
+        if (apiProbe?.status === 'ok') {
+          summary.go = true;
+          summary.linked = true;
+          summary.expired = false;
+          delete summary.error;
+        }
+        return [name, summary];
       })
     );
 
@@ -5619,8 +7400,8 @@ app.whenReady().then(() => {
     const envCookie = process.env.TOKEN_MONITOR_OPENCODE_COOKIE || '';
     if (envCookie && !entries.some(([, p]) => p.cookie === envCookie)) {
       const [go, zen] = await Promise.all([
-        opencodeWeb.fetchGoWeb(envCookie, {}),
-        opencodeWeb.fetchZen(envCookie, {})
+        opencodeWeb.fetchGoWeb(envCookie, electronProviderDeps()),
+        opencodeWeb.fetchZen(envCookie, electronProviderDeps())
       ]);
       let envKey = 'env';
       for (let i = 1; Object.prototype.hasOwnProperty.call(profiles, envKey); i += 1) {
@@ -5628,37 +7409,156 @@ app.whenReady().then(() => {
       }
       result[envKey] = { ...opencodeWeb.summarizeLink(go, zen), balanceUsd: zen.balanceUsd, env: true };
     }
-    const value = { profiles: result, linked: Object.values(result).some(s => s.linked) };
+    // Zero configuration still has an account behind it. Without probing the key
+    // OpenCode stored for itself, the panel reports "not set up" while the limits
+    // card is showing live quota read from that very key.
+    //
+    // It rides in its own field rather than under a reserved name inside
+    // `profiles`: account names are user-chosen, so any sentinel key is one a
+    // user can also type, and the synthetic entry would then overwrite their
+    // account's real status (and collide with its DOM id in the renderer).
+    let ambient = null;
+    if (opencodeAmbientKeyActive(profiles) && settings.opencodeAmbientEnabled === false) {
+      ambient = { linked: false, expired: false, go: false, zen: false, hasBalance: false, balanceUsd: null, ambient: true, disabled: true };
+    } else if (opencodeAmbientKeyActive(profiles)) {
+      const probe = await probeOpenCodeApiKey(opencodeGoApi.readGoApiKey(process.env));
+      ambient = {
+        linked: probe.status === 'ok',
+        expired: probe.status === 'unauthorized',
+        go: probe.status === 'ok',
+        zen: false,
+        hasBalance: false,
+        balanceUsd: null,
+        ambient: true,
+        ...(probe.status === 'ok' || probe.status === 'unauthorized' ? {} : { error: probe.status })
+      };
+    }
+    const value = {
+      profiles: result,
+      ambient,
+      linked: Object.values(result).some(s => s.linked) || Boolean(ambient?.linked)
+    };
     opencodeStatusCache = { value, at: now };
     return value;
   });
   ipcMain.handle('opencode:getProfiles', async () => {
     const profiles = settings.opencodeProfiles || {};
+    // The Go quota also arrives with no configuration at all, from the key
+    // OpenCode itself stores. Without counting that, the panel reports "not set
+    // up" while the limits card is showing live API data from the same account.
     const hasEnvVar = Boolean(process.env.TOKEN_MONITOR_OPENCODE_COOKIE);
-    // Strip cookie values — renderer only needs name/enabled for display
-    const safe = {};
+    // Kept as its own field rather than folded into hasEnvVar: an environment
+    // cookie and a key OpenCode stored for itself are different sources, and a
+    // later reader seeing hasEnvVar would reasonably assume the former.
+    const hasAmbientKey = opencodeAmbientKeyActive(profiles);
+    // Credential values never cross to the renderer; which kinds exist does, so
+    // the list can show what a profile actually holds.
+    const ambientKey = opencodeGoApi.readGoApiKey(process.env);
+    const ambientIdentity = ambientKey ? opencodeGoApi.goApiIdentity(ambientKey) : '';
+    // Keyed on user-typed names, so it must not inherit one. Structured clone
+    // hands the renderer a plain object either way.
+    const safe = Object.create(null);
     for (const [name, p] of Object.entries(profiles)) {
-      safe[name] = { enabled: p.enabled };
+      safe[name] = {
+        enabled: p.enabled,
+        hasApiKey: Boolean(p.apiKey),
+        hasCookie: Boolean(p.cookie),
+        usesAmbientKey: Boolean(p.useAmbientKey),
+        // Held but not resolving, because the key it was bound to is no longer
+        // the one on this machine. Without saying so the list shows the
+        // credential as present while the collector ignores it, and on an
+        // account that also has a cookie nothing else would reveal it.
+        ambientStale: Boolean(p.useAmbientKey)
+          && !opencodeProfiles.ambientKeyFor(p, ambientKey, ambientIdentity)
+      };
     }
-    return { profiles: safe, hasEnvVar };
+    return {
+      profiles: safe,
+      hasEnvVar,
+      hasAmbientKey,
+      ambientEnabled: settings.opencodeAmbientEnabled !== false
+    };
   });
-  ipcMain.handle('opencode:saveProfile', async (_event, name, raw) => {
-    const cookie = opencodeWeb.sanitizeCookieHeader(raw);
-    if (!cookie || !name) return { ok: false, error: 'Empty name or cookie' };
+  // `kind` defaults to 'cookie' so an older renderer calling with two arguments
+  // keeps its existing behavior.
+  ipcMain.handle('opencode:saveProfile', async (_event, name, raw, kind = 'cookie', options = {}) => {
+    // Trimmed, so whitespace cannot create an account name that renders blank
+    // and that nobody could ever type again to attach a second credential.
+    name = String(name || '').trim();
+    if (!name) return { ok: false, error: 'Empty name' };
+    // Reject anything else rather than treating it as a cookie: an unrecognized
+    // kind would store the value in the wrong field and read as a credential it
+    // is not.
+    if (!['api', 'cookie', 'ambient'].includes(kind)) {
+      return { ok: false, error: `Unknown credential kind: ${kind}` };
+    }
     try {
-      const [go, zen] = await Promise.all([
-        opencodeWeb.fetchGoWeb(cookie, {}),
-        opencodeWeb.fetchZen(cookie, {})
-      ]);
-      if (opencodeWeb.summarizeLink(go, zen).expired) {
-        return { ok: false, error: 'OpenCode rejected the cookie (it may be expired)' };
+      let credential;
+      if (kind === 'ambient') {
+        // Naming the auto-detected credential. A reference is stored, never the
+        // key itself, so the key is re-read every tick rather than going stale
+        // at 401 behind a snapshot.
+        const ambientKey = opencodeGoApi.readGoApiKey(process.env);
+        if (!ambientKey) {
+          return { ok: false, error: 'No OpenCode credential found on this machine' };
+        }
+        // Records which account the reference was bound to, so a key that later
+        // changes stops resolving here instead of quietly pairing whoever is
+        // signed in next with this account's cookie. It is a digest, not the
+        // key: the value itself is never stored for this credential kind.
+        credential = {
+          useAmbientKey: true,
+          ambientKeyIdentity: opencodeGoApi.goApiIdentity(ambientKey)
+        };
+      } else if (kind === 'api') {
+        const apiKey = String(raw || '').trim();
+        if (!apiKey) return { ok: false, error: 'Empty API key' };
+        const probe = await probeOpenCodeApiKey(apiKey);
+        if (probe.status === 'unauthorized') {
+          return { ok: false, error: 'OpenCode rejected the API key' };
+        }
+        // The key authenticates but the workspace has no Go plan, so this
+        // profile would render permanently empty. Say so instead of saving it.
+        if (probe.status === 'notConfigured') {
+          return { ok: false, error: 'That account has no OpenCode Go subscription' };
+        }
+        if (probe.status !== 'ok') {
+          return { ok: false, error: 'Could not reach the OpenCode usage API' };
+        }
+        credential = { apiKey };
+      } else {
+        const cookie = opencodeWeb.sanitizeCookieHeader(raw);
+        if (!cookie) return { ok: false, error: 'Empty cookie' };
+        const [go, zen] = await Promise.all([
+          opencodeWeb.fetchGoWeb(cookie, electronProviderDeps()),
+          opencodeWeb.fetchZen(cookie, electronProviderDeps())
+        ]);
+        if (opencodeWeb.summarizeLink(go, zen).expired) {
+          return { ok: false, error: 'OpenCode rejected the cookie (it may be expired)' };
+        }
+        credential = { cookie };
       }
-      const profiles = settings.opencodeProfiles || {};
-      profiles[name] = { cookie, enabled: true };
-      settings.opencodeProfiles = profiles;
+      // Saving one credential replaces only that kind and keeps the others. Two
+      // kinds under one profile name is how a user says "these are the same
+      // account", which is the only thing that licenses reading Go quota from
+      // the key while Zen balance comes from the cookie. Nothing associates them
+      // automatically — same machine is not evidence of same account — so the
+      // binding is refused here until the caller confirms it, whichever UI path
+      // asked. A blur that happens to land on an existing name must not be able
+      // to make that claim on the user's behalf.
+      const ambientWasActive = opencodeAmbientKeyActive(settings.opencodeProfiles || {});
+      const result = opencodeProfiles.saveCredential(
+        settings.opencodeProfiles || {},
+        name,
+        credential,
+        { merge: options.merge === true }
+      );
+      if (!result.ok) return result;
+      settings.opencodeProfiles = result.profiles;
       saveSettings({ throwOnError: true });
       opencodeStatusCache = { value: null, at: 0 };
       void queueLimitInvalidation({ provider: 'opencode', accountName: name }, 'profile-save');
+      refreshOpencodeAmbientOwnership(ambientWasActive);
       return { ok: true };
     } catch (err) {
       return { ok: false, error: err.message };
@@ -5666,7 +7566,8 @@ app.whenReady().then(() => {
   });
   ipcMain.handle('opencode:deleteProfile', async (_event, name) => {
     const profiles = settings.opencodeProfiles || {};
-    const deletedProfile = profiles[name];
+    const ambientWasActive = opencodeAmbientKeyActive(profiles);
+    const deletedProfile = opencodeProfiles.readProfile(profiles, name);
     delete profiles[name];
     if (deletedProfile?.cookie && settings.opencodeCookie === deletedProfile.cookie) {
       settings.opencodeCookie = '';
@@ -5682,16 +7583,78 @@ app.whenReady().then(() => {
       clear: true,
       refresh: false
     });
+    refreshOpencodeAmbientOwnership(ambientWasActive);
     return { ok: true };
   });
-  ipcMain.handle('opencode:renameProfile', async (_event, oldName, newName) => {
-    if (!newName || oldName === newName) return { ok: false, error: 'Invalid name' };
-    const profiles = settings.opencodeProfiles || {};
-    if (!profiles[oldName]) return { ok: false, error: 'Profile not found' };
-    if (profiles[newName]) return { ok: false, error: 'Profile name already exists' };
-    profiles[newName] = profiles[oldName];
-    delete profiles[oldName];
-    settings.opencodeProfiles = profiles;
+  // Removes one credential from an account, leaving the others. Deleting the
+  // account removes all of them; this is how a binding is undone without
+  // losing the credential the user wanted to keep.
+  ipcMain.handle('opencode:removeCredential', async (_event, name, kind) => {
+    const ambientWasActive = opencodeAmbientKeyActive(settings.opencodeProfiles || {});
+    const result = opencodeProfiles.removeCredential(settings.opencodeProfiles || {}, name, kind);
+    if (!result.ok) return result;
+    if (result.removedCookie && settings.opencodeCookie === result.removedCookie) {
+      settings.opencodeCookie = '';
+    }
+    settings.opencodeProfiles = result.profiles;
+    try {
+      saveSettings({ throwOnError: true });
+    } catch (error) {
+      return { ok: false, error: error?.message || 'Could not persist OpenCode credential removal' };
+    }
+    opencodeStatusCache = { value: null, at: 0 };
+    void queueLimitInvalidation({ provider: 'opencode', accountName: name }, 'credential-remove', {
+      clear: true
+    });
+    refreshOpencodeAmbientOwnership(ambientWasActive);
+    return { ok: true };
+  });
+  // Moves one credential to another account name, creating it when needed. This
+  // is what "rename a credential" means in a model where the name is the
+  // account: moving it to a fresh name splits it off, moving it onto an
+  // existing name binds it there. The value never crosses to the renderer.
+  ipcMain.handle('opencode:moveCredential', async (_event, name, kind, targetName, options = {}) => {
+    const ambientWasActive = opencodeAmbientKeyActive(settings.opencodeProfiles || {});
+    const result = opencodeProfiles.moveCredential(
+      settings.opencodeProfiles || {},
+      name,
+      kind,
+      targetName,
+      { merge: options.merge === true }
+    );
+    if (!result.ok) return result;
+    if (result.unchanged) return { ok: true };
+    const target = String(targetName || '').trim();
+    settings.opencodeProfiles = result.profiles;
+    try {
+      saveSettings({ throwOnError: true });
+    } catch (error) {
+      return { ok: false, error: error?.message || 'Could not persist OpenCode credential move' };
+    }
+    opencodeStatusCache = { value: null, at: 0 };
+    for (const account of [name, target]) {
+      void queueLimitInvalidation({ provider: 'opencode', accountName: account }, 'credential-move', {
+        clear: true
+      });
+    }
+    refreshOpencodeAmbientOwnership(ambientWasActive);
+    return { ok: true };
+  });
+  // `merge` is the caller confirming that renaming onto an existing account
+  // asserts the two are the same OpenCode account — the same claim as saving a
+  // second credential under one name, and the only thing that licenses reading
+  // quota from one credential while identity comes from another. Without it an
+  // existing name is refused, so the assertion is never made by accident.
+  ipcMain.handle('opencode:renameProfile', async (_event, oldName, newName, options = {}) => {
+    const ambientWasActive = opencodeAmbientKeyActive(settings.opencodeProfiles || {});
+    const result = opencodeProfiles.renameProfile(
+      settings.opencodeProfiles || {},
+      oldName,
+      newName,
+      { merge: options.merge === true }
+    );
+    if (!result.ok) return result;
+    settings.opencodeProfiles = result.profiles;
     try {
       saveSettings({ throwOnError: true });
     } catch (error) {
@@ -5703,12 +7666,17 @@ app.whenReady().then(() => {
       refresh: false
     });
     void queueLimitInvalidation({ provider: 'opencode', accountName: newName }, 'profile-rename');
+    refreshOpencodeAmbientOwnership(ambientWasActive);
     return { ok: true };
   });
   ipcMain.handle('opencode:setProfileEnabled', async (_event, name, enabled) => {
     const profiles = settings.opencodeProfiles || {};
-    if (!profiles[name]) return { ok: false, error: 'Profile not found' };
-    profiles[name].enabled = Boolean(enabled);
+    // Own properties only. An inherited key resolves to an object that is not an
+    // account, and writing `enabled` onto it would reach whatever else shares
+    // that prototype.
+    const profile = opencodeProfiles.readProfile(profiles, name);
+    if (!profile) return { ok: false, error: 'Profile not found' };
+    profile.enabled = Boolean(enabled);
     settings.opencodeProfiles = profiles;
     try {
       saveSettings({ throwOnError: true });
@@ -5720,6 +7688,28 @@ app.whenReady().then(() => {
       clear: !enabled,
       refresh: Boolean(enabled)
     });
+    return { ok: true };
+  });
+  // The auto-detected account has no stored record to carry an enabled flag, so
+  // its switch is a device preference rather than a credential. Writing one
+  // instead would mean a toggle that creates an account under a name the user
+  // can also type, cannot be undone symmetrically once that account is edited,
+  // and quietly comes back enabled when the key it pinned is rotated.
+  ipcMain.handle('opencode:setAmbientEnabled', async (_event, enabled) => {
+    settings.opencodeAmbientEnabled = enabled !== false;
+    try {
+      saveSettings({ throwOnError: true });
+    } catch (error) {
+      return { ok: false, error: error?.message || 'Could not persist the OpenCode detection setting' };
+    }
+    opencodeStatusCache = { value: null, at: 0 };
+    // Provider-wide, for the same reason every ownership change is: this row has
+    // no account name for a scoped refresh to address. It must still refresh
+    // afterwards. Clearing without one wipes every OpenCode account and rebuilds
+    // none of them, so switching off the detected key read as switching off the
+    // whole provider — the rest of the accounts are unaffected by this setting
+    // and have to come straight back.
+    void queueLimitInvalidation({ provider: 'opencode' }, 'ambient-toggle', { clear: true });
     return { ok: true };
   });
   ipcMain.handle('openrouter:getProfiles', async () => {
@@ -5734,10 +7724,10 @@ app.whenReady().then(() => {
     if (!name) return { ok: false, errorCode: 'invalidName' };
     if (!apiKey) return { ok: false, errorCode: 'missingApiKey' };
     try {
-      const provider = await openrouterLimits.fetchOpenRouterAccount(name, apiKey, {
+      const provider = await openrouterLimits.fetchOpenRouterAccount(name, apiKey, electronProviderDeps({
         env: process.env,
         signal: AbortSignal.timeout(15_000)
-      });
+      }));
       if (provider?.status !== 'ok') {
         return { ok: false, error: provider?.status === 'unauthorized' ? 'OpenRouter rejected the API key' : 'Could not validate the OpenRouter API key' };
       }
@@ -5829,6 +7819,10 @@ app.whenReady().then(() => {
       && !thirdPartyLimits.newapiAccessToken({}, rawProfile.accessToken)
     ) return { ok: false, errorCode: 'missingAccessToken' };
     if (
+      adapter === thirdPartyLimits.SUB2API_ADAPTER
+      && !thirdPartyLimits.newapiAccessToken({}, rawProfile.accessToken)
+    ) return { ok: false, errorCode: 'missingAccessToken' };
+    if (
       [thirdPartyLimits.NEWAPI_TOKEN_ADAPTER, thirdPartyLimits.CUSTOM_BALANCE_ADAPTER].includes(adapter)
       && !thirdPartyLimits.newapiApiKey({}, rawProfile.apiKey)
     ) return { ok: false, errorCode: 'missingApiKey' };
@@ -5870,19 +7864,20 @@ app.whenReady().then(() => {
     });
     if (!profile) return { ok: false, errorCode: 'invalidCredential' };
     try {
-      const provider = await thirdPartyLimits.fetchThirdPartyAccount({ name, ...profile }, {
+      const provider = await thirdPartyLimits.fetchThirdPartyAccount({ name, ...profile }, electronProviderDeps({
         env: process.env,
         signal: AbortSignal.timeout(15_000)
-      });
+      }));
       if (provider?.status !== 'ok') {
         return {
           ok: false,
           errorCode: provider?.status === 'unauthorized' ? 'invalidCredential' : 'unavailable'
         };
       }
+      const storedProfile = thirdPartyProfileWithCanonicalIdentity(profile, provider) || profile;
       settings.thirdPartyProfiles = {
         ...(settings.thirdPartyProfiles || {}),
-        [name]: profile
+        [name]: storedProfile
       };
       saveSettings({ throwOnError: true });
       void queueLimitInvalidation({ provider: 'thirdparty', accountName: name }, 'profile-save');
@@ -6098,7 +8093,7 @@ app.whenReady().then(() => {
     else mainWindow?.close();
   });
   ipcMain.handle('dashboard:open', () => { createDashboardWindow(); return true; });
-  ipcMain.handle('dashboard:getHistory', () => getDashboardHistory());
+  ipcMain.handle('dashboard:getHistory', (_event, options) => getDashboardHistory(options));
   ipcMain.on('dashboard:ready', (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     if (!win || win !== dashboardWindow || win.isDestroyed()) return;
@@ -6108,14 +8103,37 @@ app.whenReady().then(() => {
   });
   ipcMain.on('dashboard:minimize', (event) => { BrowserWindow.fromWebContents(event.sender)?.minimize(); });
   ipcMain.on('dashboard:close', (event) => { BrowserWindow.fromWebContents(event.sender)?.close(); });
-  app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+  // The window this builds is about to be on screen, so the policy is resolved
+  // for a visible window exactly as focusExistingWindow() does. Without it this
+  // was the one path reaching applyMacSpaceBehavior() with a process type
+  // nothing had decided, which skipTransformProcessType now preserves.
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length > 0) return;
+    applyMacActivationPolicy({ mainWindowVisible: true });
+    createWindow();
+  });
   maybeRunBackgroundUpdateCheck();
   startAppUpdateBackgroundChecks();
 });
 
 app.on('second-instance', focusExistingWindow);
 app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
-app.on('before-quit', () => { quitRequested = true; if (rateRefreshTimer) clearInterval(rateRefreshTimer); if (appUpdateBackgroundTimer) clearInterval(appUpdateBackgroundTimer); unregisterWindowToggleShortcut(); stopAll(); });
+// Every quit route (Cmd+Q, last window closed, system shutdown) lands here.
+// performQuit is synchronous through to the exit, so there is nothing to wait
+// for and deliberately no preventDefault: taking the quit over would cancel an
+// OS-initiated logout or restart on macOS.
+app.on('before-quit', () => {
+  quitRequested = true;
+  antigravityOAuthLoginController?.abort();
+  resetMacWidgetReloadThrottle();
+  if (rateRefreshTimer) clearInterval(rateRefreshTimer);
+  if (appUpdateBackgroundTimer) clearInterval(appUpdateBackgroundTimer);
+  stopTaskbarZOrderKeeper();
+  unregisterWindowToggleShortcut();
+  electronWorkbuddyLocalAuth.dispose();
+  if (skipForcedQuit) return;
+  performQuit();
+});
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
   process.once(signal, requestAppQuit);
 }

@@ -2,17 +2,24 @@
 
 const assert = require('node:assert/strict');
 const test = require('node:test');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { installSourceEnvGuard } = require('../helpers/sourceEnv');
 
 const {
+  CLIENT_SYNC_DETAIL_CODES,
   CLIENT_HEALTH_OVERALL_STATES,
   CLIENT_HEALTH_VERSION,
   CLIENT_SOURCE_CHECK_IDS,
+  MAX_SYNC_DETAIL_INPUT_LENGTH,
   MAX_CHECKS_PER_CLIENT,
   MAX_DIAGNOSTICS_PER_CLIENT,
   MAX_TRACKED_CLIENTS,
   countOverall,
   deriveClientOverall,
   deriveLegacyClientStatus,
+  classifyClientSyncDetailCode,
   normalizeClientHealth
 } = require('../../src/shared/clientHealth');
 const {
@@ -29,6 +36,8 @@ const { KNOWN_CLIENTS } = require('../../src/shared/clientTracking');
 const { createSelfSyncThrottle } = require('../../src/shared/selfSyncThrottle');
 const { applySessionUsageArchive } = require('../../src/shared/sessionUsageArchive');
 const { aggregateDevices, mergeDeviceRecord, normalizeDeviceRecord } = require('../../src/shared/usage');
+
+installSourceEnvGuard(test);
 
 const core = (overrides = {}) => ({
   source: { state: 'detected', detectedCount: 1, checkedCount: 1 },
@@ -315,7 +324,7 @@ test('every source-root id the collector emits is in the allowlist', () => {
   // And nothing in the allowlist is dead weight. Two ids are exempt because they
   // are discovered rather than constructed: `hermes-profile` comes from profiles
   // found on disk, and `wsl-home` only appears on Windows with a running distro.
-  const discoveryDependent = new Set(['hermes-profile', 'wsl-home']);
+  const discoveryDependent = new Set(['copilot-otel-exporter', 'hermes-profile', 'wsl-home']);
   const checked = new Set([...emitted, 'antigravity-ide-source', 'antigravity-cli-data']);
   for (const id of CLIENT_SOURCE_CHECK_IDS) {
     if (discoveryDependent.has(id)) continue;
@@ -323,12 +332,54 @@ test('every source-root id the collector emits is in the allowlist', () => {
   }
 });
 
-test('labelling the roots left the watcher its original path list', () => {
+test('Claude source roots follow CLAUDE_CONFIG_DIR like tokscale', () => {
+  const previousConfigDir = process.env.CLAUDE_CONFIG_DIR;
+  const originalHomedir = os.homedir;
+  os.homedir = () => path.join(path.sep, 'home', 'alice');
+  process.env.CLAUDE_CONFIG_DIR = path.join(path.sep, 'srv', 'claude-config');
+  try {
+    assert.deepEqual(clientSourceRoots('claude').claude, [
+      { id: 'claude-projects', dir: path.join(path.sep, 'srv', 'claude-config', 'projects') },
+      { id: 'claude-transcripts', dir: path.join(path.sep, 'srv', 'claude-config', 'transcripts') }
+    ]);
+  } finally {
+    os.homedir = originalHomedir;
+    if (previousConfigDir === undefined) delete process.env.CLAUDE_CONFIG_DIR;
+    else process.env.CLAUDE_CONFIG_DIR = previousConfigDir;
+  }
+});
+
+test('self-synced cache roots follow the Tokscale config dir on Windows', () => {
+  const homeDir = 'C:\\Users\\alice';
+  const appData = 'C:\\Users\\alice\\AppData\\Roaming';
+  const roots = clientSourceRoots('cursor,antigravity', {
+    homeDir,
+    platform: 'win32',
+    env: { APPDATA: appData }
+  });
+
+  assert.deepEqual(roots.cursor, [{
+    id: 'tokscale-cursor-cache',
+    dir: path.join(appData, 'tokscale', 'cursor-cache')
+  }]);
+  assert.deepEqual(roots.antigravity, [{
+    id: 'tokscale-antigravity-cache',
+    dir: path.join(appData, 'tokscale', 'antigravity-cache')
+  }]);
+});
+
+test('labelling roots keeps diagnostics separate from watcher roots', () => {
   const roots = clientSourceRoots(KNOWN_CLIENTS);
   const candidates = clientWatchCandidates(KNOWN_CLIENTS);
   assert.deepEqual(Object.keys(candidates).sort(), Object.keys(roots).sort());
   for (const [client, dirs] of Object.entries(candidates)) {
-    assert.deepEqual(dirs, roots[client].map((root) => root.dir));
+    const expected = roots[client]
+      .filter((root) => (
+        !(client === 'copilot' && root.id === 'copilot-otel')
+        && root.id !== 'kiro-ide-globalstorage'
+      ))
+      .map((root) => root.dir);
+    assert.deepEqual(dirs, expected);
   }
 });
 
@@ -338,14 +389,32 @@ test('labelling the roots left the watcher its original path list', () => {
 test('clientSourceChecks collapses same-kind roots into one entry', () => {
   const checks = clientSourceChecks('copilot,zed,cline,antigravity');
   const ids = (client) => checks[client].map((check) => check.id);
-  assert.deepEqual(ids('copilot'), ['copilot-otel', 'vscode-workspace-storage']);
+  assert.deepEqual(ids('copilot'), ['copilot-otel', 'copilot-data', 'vscode-workspace-storage']);
   assert.deepEqual(ids('zed'), ['zed-threads']);
-  assert.deepEqual(ids('cline'), ['cline-tasks']);
+  assert.deepEqual(ids('cline'), ['cline-tasks', 'cline-cli-sessions']);
   // antigravity's watch candidate is only the tokscale cache; its two real
   // sources are separate checks so the record can tell them apart.
   assert.deepEqual(ids('antigravity'), ['tokscale-antigravity-cache', 'antigravity-ide-source', 'antigravity-cli-data']);
   for (const list of Object.values(checks)) {
     for (const check of list) assert.equal(typeof check.exists, 'boolean');
+  }
+});
+
+test('Qoder CN source health requires local.db, not only its watch parent', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tm-qodercn-health-'));
+  const dbPath = path.join(tempRoot, 'cache', 'db', 'local.db');
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true });
+  const previous = process.env.TOKEN_MONITOR_QODER_CN_DB_PATH;
+  process.env.TOKEN_MONITOR_QODER_CN_DB_PATH = dbPath;
+  try {
+    const roots = clientSourceRoots('qodercn').qodercn;
+    assert.equal(roots[0].dir, path.dirname(dbPath));
+    assert.equal(roots[0].sourcePath, dbPath);
+    assert.deepEqual(clientSourceChecks('qodercn').qodercn, [{ id: 'qodercn-db', exists: false }]);
+  } finally {
+    if (previous === undefined) delete process.env.TOKEN_MONITOR_QODER_CN_DB_PATH;
+    else process.env.TOKEN_MONITOR_QODER_CN_DB_PATH = previous;
+    fs.rmSync(tempRoot, { recursive: true, force: true });
   }
 });
 
@@ -456,6 +525,9 @@ test('deriveClientHealth carries the self-sync lane into the record', () => {
   throttle.completeAttempt('cursor', attempt, true, 'sync-timeout');
   const failed = deriveClientHealth('cursor', { clients: { cursor: 500 } }, options).clients.cursor;
   assert.equal(failed.collection.state, 'failed');
+  assert.equal(failed.collection.syncFailureStage, 'timeout');
+  assert.equal(failed.collection.syncDetailCode, 'unknown');
+  assert.equal(Object.hasOwn(failed.collection, 'syncExitCode'), false);
   assert.equal(failed.overall, 'attention');
   assert.deepEqual(failed.diagnostics, [{ code: 'sync-timeout' }]);
 
@@ -465,6 +537,9 @@ test('deriveClientHealth carries the self-sync lane into the record', () => {
   const ok = deriveClientHealth('cursor', { clients: { cursor: 500 } }, options).clients.cursor;
   assert.equal(ok.collection.state, 'ok');
   assert.equal(ok.collection.lastSuccessAt, new Date(clock.now).toISOString());
+  assert.equal(Object.hasOwn(ok.collection, 'syncFailureStage'), false);
+  assert.equal(Object.hasOwn(ok.collection, 'syncDetailCode'), false);
+  assert.equal(Object.hasOwn(ok.collection, 'syncExitCode'), false);
   assert.equal(ok.overall, 'healthy');
   // A healthy client keeps its sync stamps: "last synced two minutes ago" is the
   // answer to "why is today still 0", not a fault report.
@@ -479,6 +554,128 @@ test('a self-sync failure reports a code and never its stderr', () => {
   const later = throttle.beginAttempt('antigravity');
   throttle.completeAttempt('antigravity', later, true, 'sync-exit-error');
   assert.equal(throttle.syncStatus('antigravity').failureCode, 'sync-exit-error');
+});
+
+test('client health preserves safe process-exit evidence and drops unsafe metadata', () => {
+  const valid = normalizeClientHealth({
+    clients: {
+      antigravity: {
+        ...core({
+          collection: {
+            state: 'failed',
+            syncFailureStage: 'process-exit',
+            syncDetailCode: 'rpc-failed',
+            syncExitCode: 17
+          }
+        }),
+        diagnostics: [{ code: 'sync-exit-error' }]
+      }
+    }
+  });
+  assert.equal(valid.clients.antigravity.collection.syncFailureStage, 'process-exit');
+  assert.equal(valid.clients.antigravity.collection.syncDetailCode, 'rpc-failed');
+  assert.equal(valid.clients.antigravity.collection.syncExitCode, 17);
+
+  const unsafe = normalizeClientHealth({
+    clients: {
+      antigravity: {
+        ...core({
+          collection: {
+            state: 'failed',
+            syncFailureStage: '/Users/alice/private',
+            syncDetailCode: '/Users/alice/private',
+            syncExitCode: '17; rm -rf'
+          }
+        }),
+        diagnostics: [{ code: 'sync-exit-error' }]
+      }
+    }
+  });
+  assert.equal(unsafe.clients.antigravity.collection.syncFailureStage, 'unknown');
+  assert.equal(unsafe.clients.antigravity.collection.syncDetailCode, 'unknown');
+  assert.equal(Object.hasOwn(unsafe.clients.antigravity.collection, 'syncExitCode'), false);
+});
+
+test('sync detail classification is conservative and emits only closed codes', () => {
+  assert.deepEqual([...CLIENT_SYNC_DETAIL_CODES].sort(), [
+    'authentication-failed',
+    'cache-write-failed',
+    'invalid-response',
+    'language-server-not-found',
+    'network-failed',
+    'network-timeout',
+    'permission-denied',
+    'rpc-failed',
+    'sync-lock-present',
+    'unknown'
+  ].sort());
+  assert.equal(
+    classifyClientSyncDetailCode({
+      client: 'antigravity',
+      text: 'Failed to connect to Antigravity RPC on port 12345'
+    }),
+    'rpc-failed'
+  );
+  assert.equal(
+    classifyClientSyncDetailCode({
+      client: 'antigravity',
+      text: 'Windows process discovery returned no data; cannot discover Antigravity language servers'
+    }),
+    'language-server-not-found'
+  );
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'Cursor API returned status 401' }), 'authentication-failed');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'Invalid response from Cursor API - expected CSV format' }), 'invalid-response');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'Failed to persist file: Permission denied /Users/alice' }), 'permission-denied');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'spawn EPERM' }), 'permission-denied');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'Failed to write to cache manifest' }), 'cache-write-failed');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'Connection refused by Cursor API' }), 'network-failed');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'The request timed out' }), 'network-timeout');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'HTTPS request timed out' }), 'network-timeout');
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'tokscale cursor sync timed out after 30000ms' }), null);
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'ETIMEDOUT while connecting to Cursor API' }), 'network-timeout');
+  assert.equal(
+    classifyClientSyncDetailCode({
+      client: 'antigravity',
+      text: "Error: Antigravity sync lock at '/Users/alice/.config/tokscale/antigravity-cache/sync.lock' already exists."
+    }),
+    'sync-lock-present'
+  );
+  assert.equal(
+    classifyClientSyncDetailCode({ client: 'cursor', text: 'Cursor sync lock at /tmp/sync.lock already exists.' }),
+    null,
+    'the lock code is scoped to the upstream Antigravity wording'
+  );
+  assert.equal(classifyClientSyncDetailCode({ client: 'cursor', text: 'new upstream wording with no known meaning' }), null);
+  assert.equal(
+    classifyClientSyncDetailCode({
+      client: 'cursor',
+      text: `${'x'.repeat(MAX_SYNC_DETAIL_INPUT_LENGTH + 1)}connection refused`
+    }),
+    null
+  );
+});
+
+test('Antigravity sync-lock detail replaces the generic process-exit diagnostic', () => {
+  const health = deriveClientHealth('antigravity', { clients: {} }, {
+    sourceChecks: { antigravity: [{ id: 'antigravity-ide-source', exists: true }] },
+    selfSyncThrottle: {
+      syncStatus() {
+        return {
+          state: 'failed',
+          failureCode: 'sync-exit-error',
+          failureStage: 'process-exit',
+          detailCode: 'sync-lock-present',
+          exitCode: 1
+        };
+      }
+    }
+  });
+  const entry = health.clients.antigravity;
+  assert.equal(entry.collection.syncDetailCode, 'sync-lock-present');
+  assert.deepEqual(entry.diagnostics, [
+    { code: 'sync-lock-present' },
+    { code: 'no-usage-observed' }
+  ]);
 });
 
 // lastSyncAt is the rate-limit anchor that claim() moves; a completion never

@@ -1,19 +1,22 @@
 'use strict';
 
-const clientLabels = { claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes Agent', gemini: 'Gemini', cursor: 'Cursor', opencode: 'OpenCode', openclaw: 'OpenClaw', antigravity: 'Antigravity', cline: 'Cline', kimi: 'Kimi', qwen: 'Qwen', grok: 'Grok Build', copilot: 'GitHub Copilot', pi: 'Pi', zed: 'Zed', kilocode: 'Kilo Code', micode: 'MiMo Code', zcode: 'ZCode', kiro: 'Kiro', codebuddy: 'CodeBuddy', workbuddy: 'WorkBuddy', proma: 'Proma' };
+const clientLabels = { claude: 'Claude Code', codex: 'Codex', hermes: 'Hermes Agent', gemini: 'Gemini', cursor: 'Cursor', opencode: 'OpenCode', openclaw: 'OpenClaw', antigravity: 'Antigravity', cline: 'Cline', kimi: 'Kimi', qwen: 'Qwen', grok: 'Grok Build', copilot: 'GitHub Copilot', pi: 'Pi', zed: 'Zed', kilocode: 'Kilo Code', commandcode: 'Command Code', micode: 'MiMo Code', zcode: 'ZCode', kiro: 'Kiro', codebuddy: 'CodeBuddy', workbuddy: 'WorkBuddy', proma: 'Proma', qodercn: 'Qoder CN', reasonix: 'Reasonix', dsh: 'DeepSeek Harness', cherrystudio: 'Cherry Studio', lmstudio: 'LM Studio' };
+const reasonixSessionGuard = window.TokenMonitorReasonixSessionGuard;
 const { clientColors, fallbackModelColors, modelVendorFor, modelColor } = window.TokenMonitorUsageCharts;
 const motionPreferenceApi = window.TokenMonitorMotionPreference;
 const windowsGlassApi = window.TokenMonitorWindowsGlass;
 const glassRenderingApi = window.TokenMonitorGlassRendering;
+const fontSettingsApi = window.TokenMonitorFontSettings;
 const wslStatusPresentationApi = window.TokenMonitorWslStatusPresentation;
 const statsRenderSchedulerApi = window.TokenMonitorStatsRenderScheduler;
 const tokenRateApi = window.TokenMonitorTokenRate;
 const { tokenRatePerSecond, tokenBurnPerMinute } = tokenRateApi;
 const reducedMotionMedia = window.matchMedia?.('(prefers-reduced-motion: reduce)');
 const clientsWithIcon = new Set([
-  'claude', 'codex', 'gemini', 'cursor', 'opencode', 'openclaw', 'hermes', 'antigravity', 'cline', 'kimi', 'qwen', 'grok', 'copilot', 'pi', 'zed', 'kilocode', 'micode', 'zcode', 'kiro', 'codebuddy', 'workbuddy', 'proma',
-  'xai', 'openrouter', 'deepseek', 'meta', 'mistral', 'qwen', 'moonshot', 'zai', 'zaiteam', 'cohere', 'xiaomi', 'mimo', 'minimax', 'doubao', 'volcengine', 'qoder', 'ollama', 'thirdparty'
+  'claude', 'codex', 'gemini', 'cursor', 'opencode', 'openclaw', 'hermes', 'antigravity', 'cline', 'kimi', 'qwen', 'grok', 'copilot', 'pi', 'zed', 'kilocode', 'commandcode', 'micode', 'zcode', 'kiro', 'codebuddy', 'workbuddy', 'proma', 'qodercn', 'reasonix', 'dsh', 'cherrystudio', 'lmstudio',
+  'xai', 'openrouter', 'deepseek', 'meta', 'mistral', 'qwen', 'moonshot', 'zai', 'zaiteam', 'cohere', 'xiaomi', 'mimo', 'minimax', 'doubao', 'volcengine', 'qoder', 'trae', 'ollama', 'thirdparty', 'hunyuan'
 ]);
+const limitMarksWithIcon = new Set([...clientsWithIcon, 'newapi', 'sub2api']);
 
 function osIconFor(platform) {
   const prefix = String(platform || '').toLowerCase().split('-')[0];
@@ -33,7 +36,7 @@ function iconKindFor(rowData, breakdown) {
     const vendor = modelVendorFor(rowData.key);
     return vendor && clientsWithIcon.has(vendor)
       ? { kind: 'icon', iconClass: `row-icon-${vendor}` }
-      : { kind: 'dot' };
+      : { kind: 'icon', iconClass: 'row-icon-token-monitor' };
   }
   if (breakdown === 'session') {
     return rowData.client && clientsWithIcon.has(rowData.client)
@@ -41,7 +44,8 @@ function iconKindFor(rowData, breakdown) {
       : { kind: 'dot' };
   }
   if (breakdown === 'project') return { kind: 'icon', iconClass: 'row-icon-project' };
-  return clientsWithIcon.has(rowData.key)
+  const iconSet = breakdown === 'limits' ? limitMarksWithIcon : clientsWithIcon;
+  return iconSet.has(rowData.key)
     ? { kind: 'icon', iconClass: `row-icon-${rowData.key}` }
     : { kind: 'dot' };
 }
@@ -62,12 +66,18 @@ const KNOWN_CLIENTS = [
   { id: 'pi', label: 'Pi' },
   { id: 'zed', label: 'Zed' },
   { id: 'kilocode', label: 'Kilo Code' },
+  { id: 'commandcode', label: 'Command Code' },
   { id: 'micode', label: 'MiMo Code' },
   { id: 'zcode', label: 'ZCode' },
   { id: 'kiro', label: 'Kiro' },
   { id: 'codebuddy', label: 'CodeBuddy' },
   { id: 'workbuddy', label: 'WorkBuddy' },
-  { id: 'proma', label: 'Proma' }
+  { id: 'proma', label: 'Proma' },
+  { id: 'qodercn', label: 'Qoder CN' },
+  { id: 'reasonix', label: 'Reasonix' },
+  { id: 'dsh', label: 'DeepSeek Harness' },
+  { id: 'cherrystudio', label: 'Cherry Studio' },
+  { id: 'lmstudio', label: 'LM Studio' }
 ];
 const LIMIT_PROVIDERS = [
   { id: 'claude', label: 'Claude', settingsLabel: 'Claude Code' },
@@ -78,16 +88,20 @@ const LIMIT_PROVIDERS = [
   { id: 'kimi', label: 'Kimi' },
   { id: 'grok', label: 'Grok' },
   { id: 'copilot', label: 'GitHub Copilot' },
+  { id: 'zed', label: 'Zed' },
+  { id: 'commandcode', label: 'Command Code' },
   { id: 'mimo', label: 'MiMo' },
   { id: 'zai', label: 'GLM' },
   { id: 'zaiteam', label: 'GLM Team' },
   { id: 'kiro', label: 'Kiro' },
+  { id: 'workbuddy', label: 'WorkBuddy' },
+  { id: 'qoder', label: 'Qoder' },
   { id: 'deepseek', label: 'DeepSeek' },
   { id: 'openrouter', label: 'OpenRouter' },
   { id: 'minimax', label: 'Minimax' },
   { id: 'volcengine', label: 'Volcengine' },
-  { id: 'qoder', label: 'Qoder' },
   { id: 'ollama', label: 'Ollama' },
+  { id: 'trae', label: 'Trae CN' },
   { id: 'thirdparty', label: 'Third-party APIs' }
 ];
 const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
@@ -95,7 +109,9 @@ const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
   codex: 'codexAccountGroup',
   opencode: 'opencodeCookieGroup',
   cursor: 'cursorAccountGroup',
+  antigravity: 'antigravityAccountGroup',
   kimi: 'kimiAccountGroup',
+  zed: 'zedAccountGroup',
   copilot: 'copilotAccountGroup',
   mimo: 'mimoAccountGroup',
   zai: 'zaiAccountGroup',
@@ -105,6 +121,8 @@ const LIMIT_PROVIDER_ACCOUNT_GROUP_IDS = {
   minimax: 'minimaxAccountGroup',
   volcengine: 'volcengineAccountGroup',
   qoder: 'qoderAccountGroup',
+  trae: 'traeAccountGroup',
+  commandcode: 'commandcodeAccountGroup',
   ollama: 'ollamaAccountGroup',
   thirdparty: 'thirdpartyAccountGroup'
 };
@@ -113,7 +131,9 @@ const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
   codex: 'codexAccountStatus',
   opencode: 'opencodeCookieStatus',
   cursor: 'cursorAccountStatus',
+  antigravity: 'antigravityAccountStatus',
   kimi: 'kimiAccountStatus',
+  zed: 'zedAccountStatus',
   copilot: 'copilotApiTokenStatus',
   mimo: 'mimoAccountStatus',
   zai: 'zaiAccountStatus',
@@ -123,13 +143,16 @@ const LIMIT_PROVIDER_ACCOUNT_STATUS_IDS = {
   minimax: 'minimaxApiKeyStatus',
   volcengine: 'volcengineAccountStatus',
   qoder: 'qoderAccountStatus',
+  trae: 'traeAccountStatus',
+  commandcode: 'commandcodeAccountStatus',
   ollama: 'ollamaAccountStatus',
   thirdparty: 'thirdpartyStatus'
 };
 const LIMIT_PROVIDER_CONNECTION_DETAIL_KEYS = {
   antigravity: 'settings.limits.connection.antigravity',
   grok: 'settings.limits.connection.grok',
-  kiro: 'settings.limits.connection.kiro'
+  kiro: 'settings.limits.connection.kiro',
+  workbuddy: 'settings.limits.connection.workbuddy'
 };
 const TRAY_ICON_VARIANTS = [
   { id: 'claude-brand', label: 'Claude', after: 'claude' },
@@ -168,6 +191,8 @@ const verticalDragSortApi = window.TokenMonitorVerticalDragSort;
 const rowDragControllerApi = window.TokenMonitorRowDragController;
 const homeOverviewApi = window.TokenMonitorHomeOverview;
 const homeModulePreferencesApi = window.TokenMonitorHomeModulePreferences;
+const fixedPeriodRangesApi = window.TokenMonitorFixedPeriodRanges;
+const hubBuildPresentationApi = window.TokenMonitorHubBuildPresentation;
 const { limitFillPercent, limitModeSuffix } = window.TokenMonitorLimitDisplayMode;
 const i18n = window.TokenMonitorI18n;
 const currencyApi = window.TokenMonitorCurrency;
@@ -177,13 +202,17 @@ const trayLayoutApi = window.TokenMonitorTrayLayout;
 const sessionRowsApi = window.TokenMonitorSessionRows;
 const breakdownRenderPolicyApi = window.TokenMonitorBreakdownRenderPolicy;
 const {
+  barScaleMax,
   createAfterLayoutScheduler,
   isLargeSessionBreakdown,
   rowRenderFingerprint,
+  rowWidth,
   shouldAnimateBreakdownRows,
   toolIconsEnabled
 } = breakdownRenderPolicyApi;
 const deviceBreakdownApi = window.TokenMonitorDeviceBreakdown;
+const toolDetailsApi = window.TokenMonitorToolDetails;
+const usageAttributionRowsApi = window.TokenMonitorUsageAttributionRows;
 const projectRowsApi = window.TokenMonitorProjectRows;
 const sessionDetailApi = window.TokenMonitorSessionDetail;
 const windowShortcutApi = window.TokenMonitorWindowShortcut;
@@ -194,12 +223,13 @@ const LIMIT_SOURCE_LABELS = { oauth: 'OAuth', cli: 'CLI', web: 'Web', rpc: 'RPC'
 const LIMIT_CAPABILITY_TAG_KEYS = {
   Auto: 'settings.limits.capability.auto',
   'OAuth/CLI': 'settings.limits.capability.oauthCli',
+  'OAuth/App/CLI': 'settings.limits.capability.oauthAppCli',
   'CLI RPC': 'settings.limits.capability.cliRpc',
   'CLI/Web': 'settings.limits.capability.cliWeb',
-  'App/CLI RPC': 'settings.limits.capability.appCliRpc',
   'Manual login': 'settings.limits.capability.manualLogin',
   Web: 'settings.limits.capability.web',
   'Web/API': 'settings.limits.capability.webApi',
+  'API/Web': 'settings.limits.capability.apiWeb',
   'App/CLI must be open': 'settings.limits.capability.appMustBeOpen',
   RPC: 'settings.limits.capability.rpc',
   'Local/Zen': 'settings.limits.capability.localZen',
@@ -247,7 +277,7 @@ const VIEW_DISPLAY_OPTIONS = [
   { id: 'limits', labelKey: 'views.limits' },
   { id: 'trends', labelKey: 'views.trends' }
 ];
-const viewPeriodValues = new Set(['today', 'month', 'allTime']);
+const viewPeriodValues = new Set(['today', 'month', 'week', 'last7', 'last30', 'allTime']);
 const viewBreakdownValues = new Set(['home', ...baseBreakdownOrder, 'status', 'limits', 'trends']);
 const HOME_MODULE_OPTIONS = [
   { id: 'limits', labelKey: 'home.limits', viewId: 'limits' },
@@ -293,7 +323,14 @@ function normalizeInitialViewValue(value, allowed, fallback) {
   return allowed.has(raw) ? raw : fallback;
 }
 
-const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), appUpdate: null, breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, serviceStatus: null, serviceStatusBusy: false, serviceProvidersExpanded: false, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, serviceStatusTicker: null, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, tokscaleStatus: null, tokscaleCheck: null, tokscaleBusy: false, hubInfo: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, qoderAccountExpanded: false, qoderPendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', floatingBubble: initialFloatingBubble, suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
+const state = { period: normalizeInitialViewValue(initialViewState.period, viewPeriodValues, 'today'), appUpdate: null, breakdown: normalizeInitialViewValue(initialViewState.breakdown, viewBreakdownValues, 'home'), viewSwitcherOpen: false, viewSwitcherHasOpened: false, limitDetailTooltipHasOpened: false, limitDetailTooltipActive: false, limitDetailTooltipRenderPending: false, settings: null, windowVisible: new URLSearchParams(window.location.search).get('windowHidden') !== '1', stats: null, homeHistory: null, homeHistoryBusy: false, homeHistoryRequested: false, homeHistorySignature: '', homeHistoryRetries: 0, homeHistoryRetryTimer: null, homeActivityScrollLeft: null, homeActivityFollowEnd: true, homeActivityResizeObserver: null, serviceStatus: null, serviceStatusBusy: false, serviceProvidersExpanded: false, trendSettingsExpanded: false, trendsActivating: false, homeSettingsExpanded: false, homeLimitSettingsExpanded: false, limitProviderSettingsExpanded: '', clientHealthExpanded: '', clientSources: clientSourceCacheApi.createClientSourceCache(), clientSourcesKey: '', clientSourcesRequest: 0, subscriptionEditingId: '', subscriptionTopUps: [], subscriptionFormBase: null, subscriptionEditorTransitionId: 0, serviceStatusTicker: null, refreshTimer: null, refreshBusy: false, refreshFeedbackTimer: null, currentTotal: 0, rowSignature: '', streamConnected: false, streamFailure: null, mode: 'idle', appInfo: null, systemDarkUi: false, tokscaleStatus: null, tokscaleCheck: null, tokscaleBusy: false, hubInfo: null, hubBuildStatus: null, cursorAccount: { status: null, error: '' }, cursorAccountExpanded: false, codexAccountExpanded: false, codexAccountError: '', codexSignInBusy: false, codexSignInFlowId: '', codexLoginUrl: '', codexLoginStatus: '', codexLoginOutput: '', codexWorkspaceChoices: [], codexWorkspaceId: '', codexActiveAccount: null, codexPendingActiveAccount: null, codexPendingActiveAccountUntil: 0, codexPendingActiveAccountTimer: null, codexSystemSwitchingAccountId: '', codexSystemSwitchErrorAccountId: '', codexSystemSwitchError: '', codexSwitchPopoverHasOpened: false, codexSwitchPopoverActive: false, codexSwitchPopoverRenderPending: false, customPricingExpanded: false, claudeAccountExpanded: false, claudePendingCheckSince: 0, opencodeProfileCount: 0, opencodeCookieExpanded: false, openrouterProfileCount: 0, openrouterAccountExpanded: false, thirdPartyProfileCount: 0, thirdPartyAccountExpanded: false, deepseekAccountExpanded: false, deepseekPendingCheckSince: 0, minimaxAccountExpanded: false, minimaxPendingCheckSince: 0, zaiAccountExpanded: false, zaiPendingCheckSince: 0, zaiteamAccountExpanded: false, zaiteamPendingCheckSince: 0, volcengineAccountExpanded: false, volcenginePendingCheckSince: 0, volcengineAgentExpanded: false, qoderAccountExpanded: false, qoderPendingCheckSince: 0, commandcodeAccountExpanded: false, commandcodePendingCheckSince: 0, kimiAccountExpanded: false, kimiPendingCheckSince: 0, ollamaAccountExpanded: false, ollamaPendingCheckSince: 0, mimoAccountExpanded: false, mimoAccountError: '', antigravityAccountExpanded: false, antigravityAccountError: '', antigravitySignInBusy: false, copilotAccountExpanded: false, copilotManualExpanded: false, copilotPendingCheckSince: 0, copilotSignInBusy: false, copilotSignInCancelable: false, copilotSignInFlowId: '', copilotAuthorizeMessage: '', copilotLoginStatus: '', copilotErrorMessage: '', floatingBubble: initialFloatingBubble, suppressInitialNumberAnimation: window.__TOKEN_MONITOR_SUPPRESS_INITIAL_NUMBER_ANIMATION__ === true, openSession: null, detailSort: 'time', recordingWindowShortcut: false, windowShortcutInvalid: false };
+state.zedAccountExpanded = false;
+state.zedPendingCheckSince = 0;
+state.toolDetailMode = 'tokens';
+state.codexResetForecast = null;
+state.codexResetForecastBusy = false;
+state.codexResetForecastRequestedAt = 0;
+state.codexResetForecastRetryTimer = null;
 state.clientRescans = clientRescanStateApi.createClientRescanState({
   onChange: (clientId) => {
     if (state.clientHealthExpanded === clientId) refillOpenClientHealthPanel();
@@ -302,6 +339,9 @@ state.clientRescans = clientRescanStateApi.createClientRescanState({
 state.toolPreferenceRenderSignature = '';
 state.toolPreferenceDetailSignature = '';
 state.toolPreferenceSourceSignature = '';
+state.limitProviderRenderSignature = '';
+state.limitPanelRenderSignature = '';
+state.settingsPushRevision = 0;
 state.homeHistoryLoadedSignature = '';
 state.homeHistoryRetrySignature = '';
 state.homeReturnVisible = false;
@@ -309,6 +349,18 @@ state.appUpdateNotesPresentedVersion = '';
 state.periodMotionActive = false;
 state.animateBarsFromZero = false;
 state.animateChartsOnRender = true;
+state.fixedPeriodHistory = null;
+state.fixedPeriodHistoryBusy = false;
+state.fixedPeriodHistoryRequested = false;
+state.fixedPeriodHistoryFailed = false;
+state.fixedPeriodHistorySignature = '';
+state.fixedPeriodHistoryRetries = 0;
+state.fixedPeriodHistoryRetrySignature = '';
+state.fixedPeriodHistoryRetryTimer = null;
+state.fixedPeriodHistoryPromise = null;
+state.fixedPeriodHistoryCoordinator = null;
+state.fixedPeriodSnapshot = null;
+state.periodMenuOpen = false;
 let directBreakdownOverride = null;
 state.projectSettingsExpanded = false;
 state.homeActivitySettingsExpanded = false;
@@ -319,9 +371,19 @@ let viewSwitcherLongPressTimer = null;
 let viewSwitcherLongPressTriggered = false;
 let viewSwitcherHoverCloseTimer = null;
 const els = {
-  shell: document.querySelector('.shell'), status: document.getElementById('status'), liveDot: document.getElementById('liveDot'), tokenRateReveal: document.getElementById('tokenRateReveal'), totalTokens: document.getElementById('totalTokens'), totalTokensCompact: document.getElementById('totalTokensCompact'), cost: document.getElementById('cost'), homePanel: document.getElementById('homePanel'), breakdown: document.getElementById('breakdown'), serviceStatusPanel: document.getElementById('serviceStatusPanel'), limitsPanel: document.getElementById('limitsPanel'), trendsPanel: document.getElementById('trendsPanel'), viewSwitcher: document.getElementById('viewSwitcher'), pinButton: document.getElementById('pinButton'), utilityActions: document.getElementById('utilityActions'), settingsButton: document.getElementById('settingsButton'), settingsPanel: document.getElementById('settingsPanel'), languageInput: document.getElementById('languageInput'), currencyInput: document.getElementById('currencyInput'), currencyRateRow: document.getElementById('currencyRateRow'), currencyRateModeAuto: document.getElementById('currencyRateModeAuto'), currencyRateModeManual: document.getElementById('currencyRateModeManual'), currencyRateManualField: document.getElementById('currencyRateManualField'), currencyRateOverrideInput: document.getElementById('currencyRateOverrideInput'), currencyRateStatus: document.getElementById('currencyRateStatus'), hubUrlInput: document.getElementById('hubUrlInput'), secretInput: document.getElementById('secretInput'), deviceIdInput: document.getElementById('deviceIdInput'), limitProviderCheckboxes: document.getElementById('limitProviderCheckboxes'), limitsRefreshInput: document.getElementById('limitsRefreshInput'), showLimitSourceInput: document.getElementById('showLimitSourceInput'), maskLimitAccountEmailsInput: document.getElementById('maskLimitAccountEmailsInput'), showLimitUsedInputs: Array.from(document.querySelectorAll('input[name="showLimitUsed"]')), liveDotInput: document.getElementById('liveDotInput'), toolIconsInput: document.getElementById('toolIconsInput'), floatingBubbleInput: document.getElementById('floatingBubbleInput'), floatingBubbleTriggerInputs: Array.from(document.querySelectorAll('input[name="floatingBubbleTrigger"]')), floatingBubbleTriggerRow: document.getElementById('floatingBubbleTriggerRow'), floatingBubbleContentInput: document.getElementById('floatingBubbleContentInput'), floatingBubbleContentRow: document.getElementById('floatingBubbleContentRow'), floatingBubbleComposer: document.getElementById('floatingBubbleComposer'), floatingBubbleContent: document.getElementById('floatingBubbleContent'), discordRpcInput: document.getElementById('discordRpcInput'), windowBehaviorInput: document.getElementById('windowBehaviorInput'), showTrayIconInput: document.getElementById('showTrayIconInput'), showTrayProviderBadgeInput: document.getElementById('showTrayProviderBadgeInput'), trayModeInput: document.getElementById('trayModeInput'), trayContentInput: document.getElementById('trayContentInput'), trayComposer: document.getElementById('trayComposer'), windowToggleShortcutValue: document.getElementById('windowToggleShortcutValue'), windowToggleShortcutClearButton: document.getElementById('windowToggleShortcutClearButton'), windowToggleShortcutNote: document.getElementById('windowToggleShortcutNote'), glassInput: document.getElementById('glassInput'), blurInput: document.getElementById('blurInput'), zoomInput: document.getElementById('zoomInput'), resetGlassButton: document.getElementById('resetGlassButton'), resetDepthButton: document.getElementById('resetDepthButton'), resetZoomButton: document.getElementById('resetZoomButton'), saveSettingsButton: document.getElementById('saveSettingsButton'), clientDisplayList: document.getElementById('clientDisplayList'), wslScanInput: document.getElementById('wslScanInput'), wslScanRow: document.getElementById('wslScanRow'), wslPanel: document.getElementById('wslPanel'), openConfigButton: document.getElementById('openConfigButton'), exportAutoInput: document.getElementById('exportAutoInput'), exportAutoDetails: document.getElementById('exportAutoDetails'), exportAutoStatus: document.getElementById('exportAutoStatus'), exportDirLabel: document.getElementById('exportDirLabel'), exportPickDirButton: document.getElementById('exportPickDirButton'), exportIntervalInput: document.getElementById('exportIntervalInput'), exportNowButton: document.getElementById('exportNowButton'), refreshButton: document.getElementById('refreshButton'), minButton: document.getElementById('minButton'), closeButton: document.getElementById('closeButton'), floatingBubbleTab: document.getElementById('floatingBubbleTab'),
+  shell: document.querySelector('.shell'), status: document.getElementById('status'), liveDot: document.getElementById('liveDot'), tokenRateReveal: document.getElementById('tokenRateReveal'), totalTokens: document.getElementById('totalTokens'), totalTokensCompact: document.getElementById('totalTokensCompact'), cost: document.getElementById('cost'), homePanel: document.getElementById('homePanel'), breakdown: document.getElementById('breakdown'), serviceStatusPanel: document.getElementById('serviceStatusPanel'), limitsPanel: document.getElementById('limitsPanel'), trendsPanel: document.getElementById('trendsPanel'), viewSwitcher: document.getElementById('viewSwitcher'), pinButton: document.getElementById('pinButton'), utilityActions: document.getElementById('utilityActions'), settingsButton: document.getElementById('settingsButton'), settingsPanel: document.getElementById('settingsPanel'), languageInput: document.getElementById('languageInput'), currencyInput: document.getElementById('currencyInput'), currencyRateRow: document.getElementById('currencyRateRow'), currencyRateModeAuto: document.getElementById('currencyRateModeAuto'), currencyRateModeManual: document.getElementById('currencyRateModeManual'), currencyRateManualField: document.getElementById('currencyRateManualField'), currencyRateOverrideInput: document.getElementById('currencyRateOverrideInput'), currencyRateStatus: document.getElementById('currencyRateStatus'), hubUrlInput: document.getElementById('hubUrlInput'), secretInput: document.getElementById('secretInput'), deviceIdInput: document.getElementById('deviceIdInput'), limitProviderCheckboxes: document.getElementById('limitProviderCheckboxes'), limitsRefreshInput: document.getElementById('limitsRefreshInput'), limitsRefreshAdaptiveNote: document.getElementById('limitsRefreshAdaptiveNote'), showLimitSourceInput: document.getElementById('showLimitSourceInput'), maskLimitAccountEmailsInput: document.getElementById('maskLimitAccountEmailsInput'), showLimitUsedInputs: Array.from(document.querySelectorAll('input[name="showLimitUsed"]')), liveDotInput: document.getElementById('liveDotInput'), toolIconsInput: document.getElementById('toolIconsInput'), floatingBubbleInput: document.getElementById('floatingBubbleInput'), floatingBubbleTriggerInputs: Array.from(document.querySelectorAll('input[name="floatingBubbleTrigger"]')), floatingBubbleTriggerRow: document.getElementById('floatingBubbleTriggerRow'), floatingBubbleContentInput: document.getElementById('floatingBubbleContentInput'), floatingBubbleContentRow: document.getElementById('floatingBubbleContentRow'), floatingBubbleComposer: document.getElementById('floatingBubbleComposer'), floatingBubbleContent: document.getElementById('floatingBubbleContent'), discordRpcInput: document.getElementById('discordRpcInput'), windowBehaviorInput: document.getElementById('windowBehaviorInput'), keepAboveTaskbarInput: document.getElementById('keepAboveTaskbarInput'), keepAboveTaskbarRow: document.getElementById('keepAboveTaskbarRow'), showTrayIconInput: document.getElementById('showTrayIconInput'), showTrayProviderBadgeInput: document.getElementById('showTrayProviderBadgeInput'), hideAppIconInput: document.getElementById('hideAppIconInput'), hideAppIconRow: document.getElementById('hideAppIconRow'), hideAppIconOptions: document.getElementById('hideAppIconOptions'), trayModeInput: document.getElementById('trayModeInput'), trayContentInput: document.getElementById('trayContentInput'), trayComposer: document.getElementById('trayComposer'), windowToggleShortcutValue: document.getElementById('windowToggleShortcutValue'), windowToggleShortcutClearButton: document.getElementById('windowToggleShortcutClearButton'), windowToggleShortcutNote: document.getElementById('windowToggleShortcutNote'), glassInput: document.getElementById('glassInput'), blurInput: document.getElementById('blurInput'), zoomInput: document.getElementById('zoomInput'), resetGlassButton: document.getElementById('resetGlassButton'), resetDepthButton: document.getElementById('resetDepthButton'), resetZoomButton: document.getElementById('resetZoomButton'), saveSettingsButton: document.getElementById('saveSettingsButton'), clientDisplayList: document.getElementById('clientDisplayList'), wslScanInput: document.getElementById('wslScanInput'), wslScanRow: document.getElementById('wslScanRow'), wslPanel: document.getElementById('wslPanel'), openConfigButton: document.getElementById('openConfigButton'), exportAutoInput: document.getElementById('exportAutoInput'), exportAutoDetails: document.getElementById('exportAutoDetails'), exportAutoStatus: document.getElementById('exportAutoStatus'), exportDirLabel: document.getElementById('exportDirLabel'), exportPickDirButton: document.getElementById('exportPickDirButton'), exportIntervalInput: document.getElementById('exportIntervalInput'), exportNowButton: document.getElementById('exportNowButton'), refreshButton: document.getElementById('refreshButton'), minButton: document.getElementById('minButton'), closeButton: document.getElementById('closeButton'), floatingBubbleTab: document.getElementById('floatingBubbleTab'),
   subscriptionList: document.getElementById('subscriptionList'), subscriptionAddForm: document.getElementById('subscriptionAddForm'), subscriptionAddToggle: document.getElementById('subscriptionAddToggle'), subscriptionAddDetails: document.getElementById('subscriptionAddDetails'), subscriptionProviderInput: document.getElementById('subscriptionProviderInput'), subscriptionAccountInput: document.getElementById('subscriptionAccountInput'), subscriptionPlanNameInput: document.getElementById('subscriptionPlanNameInput'), subscriptionAmountInput: document.getElementById('subscriptionAmountInput'), subscriptionCurrencyInput: document.getElementById('subscriptionCurrencyInput'), subscriptionIntervalCountInput: document.getElementById('subscriptionIntervalCountInput'), subscriptionIntervalInput: document.getElementById('subscriptionIntervalInput'), subscriptionStartDateInput: document.getElementById('subscriptionStartDateInput'), subscriptionAutoRenewInput: document.getElementById('subscriptionAutoRenewInput'), subscriptionNextRenewalInput: document.getElementById('subscriptionNextRenewalInput'), subscriptionNote: document.getElementById('subscriptionNote'), subscriptionOrphanNotice: document.getElementById('subscriptionOrphanNotice'), subscriptionOrphanText: document.getElementById('subscriptionOrphanText'), subscriptionOrphanAdopt: document.getElementById('subscriptionOrphanAdopt'), subscriptionOrphanDiscard: document.getElementById('subscriptionOrphanDiscard'), subscriptionSyncError: document.getElementById('subscriptionSyncError'), subscriptionNextRenewalLabel: document.getElementById('subscriptionNextRenewalLabel'), subscriptionNextRenewalNote: document.getElementById('subscriptionNextRenewalNote'), subscriptionSubmit: document.getElementById('subscriptionSubmit'), subscriptionCancelEdit: document.getElementById('subscriptionCancelEdit'), subscriptionTotalRow: document.getElementById('subscriptionTotalRow'), subscriptionErrorMessage: document.getElementById('subscriptionErrorMessage'), subscriptionPlanFields: document.getElementById('subscriptionPlanFields'), subscriptionTopUpFields: document.getElementById('subscriptionTopUpFields'), subscriptionTopUpList: document.getElementById('subscriptionTopUpList'), subscriptionTopUpDateInput: document.getElementById('subscriptionTopUpDateInput'), subscriptionTopUpAmountInput: document.getElementById('subscriptionTopUpAmountInput'), subscriptionTopUpAddButton: document.getElementById('subscriptionTopUpAddButton'), subscriptionAmountRow: document.getElementById('subscriptionAmountRow'), subscriptionTopUpHeadingRow: document.getElementById('subscriptionTopUpHeadingRow'), subscriptionKindInputs: [...document.querySelectorAll('input[name="subscriptionKind"]')]
 };
+Object.assign(els, {
+  fixedPeriodMessage: document.getElementById('fixedPeriodMessage'),
+  toolDetailFooter: document.getElementById('toolDetailFooter'),
+  toolDetailFooterTokens: document.getElementById('toolDetailFooterTokens'),
+  toolDetailFooterModels: document.getElementById('toolDetailFooterModels'),
+  monthPeriodMenu: document.getElementById('monthPeriodMenu'),
+  monthPeriodTab: document.getElementById('monthPeriodTab'),
+  periodMonthModeInput: document.getElementById('periodMonthModeInput'),
+  modelRankingMetricInputs: Array.from(document.querySelectorAll('input[name="modelRankingMetric"]'))
+});
 Object.assign(els, {
   appTitleMark: document.querySelector('.app-title-mark'),
   viewBackRow: document.getElementById('viewBackRow'),
@@ -331,6 +393,7 @@ Object.assign(els, {
   trayIconOptions: document.getElementById('trayIconOptions'),
   trayOptions: document.getElementById('trayOptions'),
   hubModeOptions: document.getElementById('hubModeOptions'),
+  hubBuildStatus: document.getElementById('hubBuildStatus'),
   hubClientFields: document.getElementById('hubClientFields'),
   hubHostFields: document.getElementById('hubHostFields'),
   hubPortInput: document.getElementById('hubPortInput'),
@@ -425,6 +488,16 @@ Object.assign(els, {
   themeAdvancedGroup: document.getElementById('themeAdvancedGroup'),
   themeAdvancedToggle: document.getElementById('themeAdvancedToggle'),
   themeAdvancedDetails: document.getElementById('themeAdvancedDetails'),
+  interfaceFontPreset: document.getElementById('interfaceFontPreset'),
+  interfaceFontInput: document.getElementById('interfaceFontInput'),
+  interfaceFontCustomRow: document.getElementById('interfaceFontCustomRow'),
+  interfaceFontPreview: document.getElementById('interfaceFontPreview'),
+  displayFontPreset: document.getElementById('displayFontPreset'),
+  displayFontInput: document.getElementById('displayFontInput'),
+  displayFontCustomRow: document.getElementById('displayFontCustomRow'),
+  displayFontPreview: document.getElementById('displayFontPreview'),
+  resetInterfaceFontButton: document.getElementById('resetInterfaceFontButton'),
+  resetDisplayFontButton: document.getElementById('resetDisplayFontButton'),
   themeVendorGroup: document.getElementById('themeVendorGroup'),
   themeVendorToggle: document.getElementById('themeVendorToggle'),
   themeVendorDetails: document.getElementById('themeVendorDetails'),
@@ -439,12 +512,14 @@ function toggleAccordionRow(row) {
   const isExpanded = row.classList.contains('expanded');
   document.querySelectorAll('.row.expanded').forEach((other) => {
     other.classList.remove('expanded');
-    other.setAttribute('aria-expanded', 'false');
+    other.querySelector('.row-head')?.setAttribute('aria-expanded', 'false');
   });
   if (!isExpanded) {
     row.classList.add('expanded');
-    row.setAttribute('aria-expanded', 'true');
+    row.querySelector('.row-head')?.setAttribute('aria-expanded', 'true');
+    renderActiveToolDetail();
   }
+  renderToolDetailFooter();
 }
 
 function setAttributeIfChanged(element, name, value) {
@@ -452,16 +527,20 @@ function setAttributeIfChanged(element, name, value) {
 }
 
 document.addEventListener('click', (event) => {
+  if (event.target.closest('button, a, input, select, textarea')) return;
   const row = event.target.closest('.row.has-accordion');
   if (row) toggleAccordionRow(row);
 });
 
 document.addEventListener('keydown', (event) => {
-  const row = event.target.closest('.row.has-accordion');
+  const row = event.target.closest('.row-head')?.closest('.row.has-accordion');
   if (!row || (event.key !== 'Enter' && event.key !== ' ')) return;
   event.preventDefault();
   toggleAccordionRow(row);
 });
+
+els.toolDetailFooterTokens.addEventListener('click', () => setActiveToolDetailMode('tokens'));
+els.toolDetailFooterModels.addEventListener('click', () => setActiveToolDetailMode('models'));
 
 document.addEventListener('pointerdown', (event) => {
   if (state.viewSwitcherOpen && !event.target.closest('#viewSwitcher')) {
@@ -495,6 +574,10 @@ function currentLocale() {
   return i18n.resolveLocale(state.settings?.locale || currentLanguage(), preferredLanguages());
 }
 
+function currentCalendarLocale() {
+  return i18n.resolveRegionalLocale([...preferredLanguages(), state.settings?.locale]);
+}
+
 function supportsLocalizedCompactTokenUnits(locale) {
   return compactTokenApi.supportsLocalizedCompactTokenUnits(locale);
 }
@@ -511,6 +594,12 @@ function t(key, params) {
   return i18n.translate(currentLocale(), key, params);
 }
 
+const diagnosticsPanel = window.TokenMonitorDiagnosticsPanel?.createDiagnosticsPanel({
+  api: window.tokenMonitor,
+  translate: t,
+  getLocale: currentLocale
+});
+
 function translatedLimitCapabilityTag(label) {
   const key = LIMIT_CAPABILITY_TAG_KEYS[label];
   return key ? t(key) : label;
@@ -526,6 +615,7 @@ function applySettingsTranslations() {
   i18n.applyTranslations(document, currentLocale());
   setThirdPartyAdapterFields();
   setSubscriptionFormMode();
+  diagnosticsPanel?.render();
 }
 
 function applySettingsSectionDom(id, open) {
@@ -625,6 +715,14 @@ function refreshIntervalLabel(value) {
   return t('settings.summary.minutes', { minutes });
 }
 
+// Adaptive is a scheduling policy rather than a duration, so the summary names
+// it instead of printing the fixed interval the user would return to.
+function limitsRefreshSummaryLabel(settings) {
+  return settings.limitsRefreshMode === 'adaptive'
+    ? t('settings.limits.refreshAdaptive')
+    : refreshIntervalLabel(settings.limitsRefreshMs);
+}
+
 function viewsSummary() {
   const visible = viewDisplayPreferencesApi.visibleViewCount({
     views: VIEW_DISPLAY_OPTIONS,
@@ -656,7 +754,7 @@ function settingsSectionSummary(section) {
   if (section === 'limits') {
     return t('settings.summary.limits', {
       enabled: enabledLimitProviderSet().size,
-      refresh: refreshIntervalLabel(state.settings.limitsRefreshMs)
+      refresh: limitsRefreshSummaryLabel(state.settings)
     });
   }
   if (section === 'subscriptions') {
@@ -696,6 +794,7 @@ function settingsSectionSummary(section) {
 }
 
 function renderSettingsSummaries() {
+  if (!isSettingsSurfaceVisible()) return;
   for (const section of SETTINGS_SECTION_IDS) {
     const el = els[`${section}SettingsSummary`];
     if (el) el.textContent = settingsSectionSummary(section);
@@ -912,13 +1011,6 @@ function formatUpdatedAge(value) {
 function versionText(value) {
   return value ? `v${value}` : 'unknown';
 }
-function appUpdateActionMode(s) {
-  if (!s) return '';
-  if (s.downloaded) return 'install';
-  if (!s.hasUpdate) return '';
-  if (s.installSupported) return 'download';
-  return s.latest?.htmlUrl ? 'release' : '';
-}
 function setAppUpdatePillDisclosure(available) {
   const action = els.appUpdatePillAction;
   if (available) {
@@ -935,7 +1027,7 @@ function renderAppUpdatePill() {
   const s = state.appUpdate;
   const pill = els.appUpdatePill;
   if (!pill) return;
-  const mode = appUpdateActionMode(s);
+  const mode = appUpdatePresentationApi.appUpdateActionMode(s);
   const version = s?.latest?.version || s?.installVersion || '';
   if (!s || !mode || !version || !s.showUpdateNotice) {
     pill.classList.add('hidden');
@@ -1003,7 +1095,7 @@ function buildAppUpdateNoteGroupNodes(groups) {
 function renderAppUpdatePopover(s) {
   const version = s?.latest?.version || '';
   const groups = releaseNoteGroupsForCurrentLocale(s?.latest);
-  const mode = appUpdateActionMode(s);
+  const mode = appUpdatePresentationApi.appUpdateActionMode(s);
   if (!version || groups.length === 0 || !mode) {
     if (els.appUpdatePopover.matches(':popover-open')) els.appUpdatePopover.hidePopover();
     els.appUpdatePopoverTitle.textContent = '';
@@ -1073,7 +1165,7 @@ function renderSettingsAppUpdateRow() {
     els.appUpdateLatest.textContent = status
       ? t('settings.appUpdate.latestWithStatus', { version: displayVersion, status })
       : `v${displayVersion}`;
-    const actionMode = appUpdateActionMode(s);
+    const actionMode = appUpdatePresentationApi.appUpdateActionMode(s);
     els.appUpdateViewReleaseButton.classList.toggle('hidden', !actionMode);
     els.appUpdateViewReleaseButton.disabled = Boolean(s.installBusy);
     els.appUpdateViewReleaseButton.textContent = actionMode === 'install'
@@ -1089,18 +1181,25 @@ function renderSettingsAppUpdateRow() {
         : t('settings.common.notChecked');
     els.appUpdateViewReleaseButton.classList.add('hidden');
   }
-  els.appUpdateCheckButton.disabled = Boolean(s.checking || s.installBusy);
+  // installRetryBlocked as well as busy: the main process stops running checks once
+  // an attempt is spent, so without this the button would sit live and do nothing.
+  // It is not folded into installBusy, which would disable View release along with
+  // it and take away the one path a spent attempt leaves working.
+  els.appUpdateCheckButton.disabled = Boolean(s.checking || s.installBusy || s.installRetryBlocked);
   els.appUpdateCheckButton.textContent = s.checking ? t('settings.appUpdate.checking') : t('settings.appUpdate.check');
   renderAppUpdateNotes(s);
   if (s.installPhase === 'downloading') {
     const percent = Number.isFinite(s.installProgress) ? Math.round(s.installProgress) : 0;
     els.appUpdateMessage.textContent = t('settings.appUpdate.downloading', { percent });
     els.appUpdateMessage.classList.remove('error');
+  } else if (s.installStarting) {
+    els.appUpdateMessage.textContent = t('settings.appUpdate.installStarting');
+    els.appUpdateMessage.classList.remove('error');
   } else if (s.downloaded) {
     els.appUpdateMessage.textContent = t('settings.appUpdate.ready');
     els.appUpdateMessage.classList.remove('error');
   } else if (s.installError) {
-    els.appUpdateMessage.textContent = t('settings.appUpdate.installError');
+    els.appUpdateMessage.textContent = t(appUpdatePresentationApi.appUpdateInstallErrorMessageKey(s.installErrorKind));
     els.appUpdateMessage.classList.add('error');
   } else if (s.lastError) {
     const error = t(presentation.errorKey);
@@ -1333,6 +1432,7 @@ function animateTotalNumber(el, from, to, duration) {
 const rowNumberAnimations = new Map();
 const rowBarAnimations = new Map();
 const rowRenderFingerprints = new WeakMap();
+const toolDetailData = new WeakMap();
 const largeSessionContainmentScheduler = createAfterLayoutScheduler(
   typeof requestAnimationFrame === 'function' ? requestAnimationFrame : null,
   typeof cancelAnimationFrame === 'function' ? cancelAnimationFrame : null
@@ -1450,12 +1550,27 @@ function animateRowNumber(el, from, to, duration = 420) {
   rowNumberAnimations.set(el, motion);
 }
 
+function cancelRowNumberAnimation(el) {
+  if (!el) return;
+  const motion = rowNumberAnimations.get(el);
+  if (motion) cancelAnimationFrame(motion.handle);
+  rowNumberAnimations.delete(el);
+  delete el.dataset.motionTarget;
+}
+
 function animateBreakdownFrom(snapshot, { duration = 420 } = {}) {
   if (!snapshot) return;
   const rows = Array.from(els.breakdown?.querySelectorAll('.row[data-key]') || []);
   if (!shouldAnimateBreakdownRows(rows.length, { reducedMotion: prefersReducedMotion() })) return;
   let enteringIndex = 0;
   for (const row of rows) {
+    // An unavailable native session value must stay a semantic label. The
+    // ordinary row-number tween formats its zero placeholder as "0", which
+    // would turn unknown data into a false numeric reading after every render.
+    if (row.dataset.tokenDataUnavailable === 'true') {
+      cancelRowNumberAnimation(row.querySelector('.row-value'));
+      continue;
+    }
     const previous = snapshot.get(row.dataset.key);
     const value = Number(row.dataset.motionValue || 0);
     const fill = row.querySelector('.bar-fill');
@@ -1599,11 +1714,6 @@ function applyBarScale(fill, scale) {
   animateBarBetween(fill, 0, safeScale, 0, 420);
 }
 
-function rowWidth(value, max) {
-  if (Number(value) <= 0) return 0;
-  return max > 0 ? Math.max(2, Math.min(100, (value / max) * 100)) : 0;
-}
-
 function rowTemplate(rowData) {
   const { key, name, platform, client, subtitle, detail, kind } = rowData;
   const row = document.createElement('div');
@@ -1698,21 +1808,142 @@ function renderDeviceAccordion(accordionInner, deviceDetail) {
   accordionInner.dataset.signature = signature;
 }
 
-function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBackground, accordionRows, deviceDetail, stale, platform, local, client, kind, cacheReadTokens, outputTokens }) {
-  const width = rowWidth(value, max);
+function appendAccordionMetricRow(content, labelText, valueText, percent = null, className = '') {
+  const item = document.createElement('div');
+  item.className = `accordion-row${className ? ` ${className}` : ''}`;
+  const label = document.createElement('div');
+  label.className = 'accordion-label';
+  const name = document.createElement('span');
+  name.className = 'accordion-item-name';
+  name.textContent = labelText;
+  label.append(name);
+  if (percent !== null) {
+    const share = document.createElement('span');
+    share.className = 'accordion-pct';
+    share.textContent = toolDetailsApi.detailPercentLabel(percent);
+    label.append(share);
+  }
+  const metric = document.createElement('div');
+  metric.className = 'accordion-value';
+  metric.textContent = valueText;
+  item.append(label, metric);
+  content.append(item);
+}
+
+function renderToolDetailAccordion(accordionInner, detail) {
+  toolDetailData.set(accordionInner, detail);
+  const modelRows = Array.isArray(detail.modelRows) ? detail.modelRows : [];
+  const hasTokenDetails = detail.tokenDetailsAvailable === true;
+  const hasModels = modelRows.length > 0;
+  const labels = {
+    tokens: t('dashboard.heatmap.tokens'),
+    models: t('views.model'),
+    cacheHit: t('dashboard.tooltip.inputCacheHit'),
+    cacheMiss: t('dashboard.tooltip.inputCacheMiss'),
+    output: t('dashboard.tooltip.output'),
+    unclassified: t('dashboard.tooltip.unclassified')
+  };
+  const tokenParts = hasTokenDetails
+    ? fixedPeriodRangesApi.tokenComponentBreakdown({
+      totalTokens: detail.value,
+      cacheReadTokens: detail.cacheReadTokens,
+      outputTokens: detail.outputTokens,
+      unclassifiedTokens: detail.unclassifiedTokens
+    })
+    : null;
+  const mode = state.toolDetailMode === 'models' && hasModels ? 'models' : 'tokens';
+  const signature = JSON.stringify([
+    detail.name,
+    detail.value,
+    mode,
+    labels,
+    tokenParts,
+    modelRows.map((model) => [model.key, model.value, model.cost, Math.round(model.percent)])
+  ]);
+  if (accordionInner.dataset.signature === signature) return;
+
+  const content = document.createElement('div');
+  content.className = 'accordion-content tool-detail-content';
+
+  if (mode === 'tokens' && hasTokenDetails) {
+    const inputPercentages = toolDetailsApi.tokenInputPercentages(tokenParts);
+    appendAccordionMetricRow(content, labels.cacheHit, formatNumber(tokenParts.cacheRead), inputPercentages.hit);
+    appendAccordionMetricRow(content, labels.cacheMiss, formatNumber(tokenParts.cacheMiss), inputPercentages.miss);
+    appendAccordionMetricRow(content, labels.output, formatNumber(tokenParts.output));
+    if (tokenParts.unclassified > 0) {
+      appendAccordionMetricRow(content, labels.unclassified, formatNumber(tokenParts.unclassified));
+    }
+  }
+
+  if (mode === 'models' && hasModels) {
+    for (const model of modelRows) {
+      const metric = model.value > 0 ? formatNumber(model.value) : formatCost(model.cost);
+      const label = model.unattributed === true ? labels.unclassified : model.name;
+      appendAccordionMetricRow(content, label, metric, model.value > 0 ? model.percent : null, 'tool-model-row');
+    }
+  }
+
+  accordionInner.replaceChildren(content);
+  accordionInner.dataset.signature = signature;
+}
+
+function activeToolDetail() {
+  if (visibleStatsSurface() !== 'main' || state.breakdown !== 'tool') return null;
+  const accordionInner = els.breakdown.querySelector('.row.expanded .row-accordion-inner');
+  const detail = accordionInner ? toolDetailData.get(accordionInner) : null;
+  if (!accordionInner || !detail) return null;
+  const hasTokenDetails = detail.tokenDetailsAvailable === true;
+  const hasModels = Array.isArray(detail.modelRows) && detail.modelRows.length > 0;
+  return hasTokenDetails && hasModels ? { accordionInner, detail } : null;
+}
+
+function renderActiveToolDetail() {
+  const active = activeToolDetail();
+  if (!active) return;
+  renderToolDetailAccordion(active.accordionInner, active.detail);
+}
+
+function renderToolDetailFooter() {
+  const active = activeToolDetail();
+  els.toolDetailFooter.classList.toggle('hidden', !active);
+  if (!active) return;
+  const mode = state.toolDetailMode;
+  els.toolDetailFooter.setAttribute('aria-label', active.detail.name);
+  els.toolDetailFooterTokens.textContent = t('dashboard.heatmap.tokens');
+  els.toolDetailFooterModels.textContent = t('views.model');
+  els.toolDetailFooterTokens.setAttribute('aria-pressed', String(mode === 'tokens'));
+  els.toolDetailFooterModels.setAttribute('aria-pressed', String(mode === 'models'));
+}
+
+function setActiveToolDetailMode(mode) {
+  const active = activeToolDetail();
+  if (!active || (mode !== 'tokens' && mode !== 'models') || state.toolDetailMode === mode) return;
+  state.toolDetailMode = mode;
+  renderToolDetailAccordion(active.accordionInner, active.detail);
+  renderToolDetailFooter();
+}
+
+function updateRow(row, { name, subtitle, detail, value, cost, barValue, max, color, barBackground, accordionRows, deviceDetail, stale, platform, local, client, kind, cacheReadTokens, outputTokens, unclassifiedTokens, modelRows, tokenDataUnavailable, sessionDetailAvailable }) {
+  const width = rowWidth(barValue, max);
   const isExpanded = row.classList.contains('expanded');
   row.className = `row${kind ? ` ${kind}-row` : ''}${stale ? ' stale' : ''}${local ? ' local' : ''}`;
   row.title = local ? 'This device' : '';
   
-  if (cacheReadTokens !== undefined || outputTokens !== undefined) {
+  if (cacheReadTokens !== undefined || outputTokens !== undefined || unclassifiedTokens !== undefined) {
     row.dataset.cacheRead = cacheReadTokens || 0;
     row.dataset.outputTokens = outputTokens || 0;
+    row.dataset.unclassifiedTokens = unclassifiedTokens || 0;
     row.dataset.totalTokens = value || 0;
     row.dataset.name = name || '';
   }
   if (platform !== undefined) row.dataset.platform = platform || '';
   if (client !== undefined) row.dataset.client = client || '';
   if (kind !== undefined) row.dataset.kind = kind || '';
+  if (kind === 'session' && client === 'reasonix') {
+    row.dataset.detailUnavailable = sessionDetailAvailable === true ? 'false' : 'true';
+  } else if (row.hasAttribute('data-detail-unavailable')) {
+    row.removeAttribute('data-detail-unavailable');
+  }
   const mark = row.querySelector('.row-mark');
   const iconKind = iconKindFor({ key: row.dataset.key, platform: row.dataset.platform || '', client: row.dataset.client || '' }, state.breakdown);
   if (iconKind.kind === 'icon') {
@@ -1730,10 +1961,17 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
   detailEl.textContent = detail || '';
   detailEl.classList.toggle('hidden', !detail);
   const valueEl = row.querySelector('.row-value');
-  valueEl.textContent = formatNumber(value);
+  if (tokenDataUnavailable === true) {
+    row.dataset.tokenDataUnavailable = 'true';
+    cancelRowNumberAnimation(valueEl);
+    valueEl.textContent = t('detailTokenUnavailable') || 'Unavailable';
+  } else {
+    delete row.dataset.tokenDataUnavailable;
+    valueEl.textContent = formatNumber(value);
+  }
   valueEl.dataset.motionValue = String(Number(value) || 0);
   row.dataset.motionValue = String(Number(value) || 0);
-  row.querySelector('.row-cost').textContent = formatCost(cost || 0);
+  row.querySelector('.row-cost').textContent = tokenDataUnavailable === true ? '' : formatCost(cost || 0);
   const fill = row.querySelector('.bar-fill');
   fill.style.background = barBackground || color;
   applyBarScale(fill, width / 100);
@@ -1773,50 +2011,53 @@ function updateRow(row, { name, subtitle, detail, value, cost, max, color, barBa
     }
     row.classList.add('has-accordion');
     if (isExpanded) row.classList.add('expanded');
-  } else if ((cacheReadTokens !== undefined || outputTokens !== undefined) && value > 0 && kind !== 'session') {
-    const cacheRead = cacheReadTokens || 0;
-    const output = outputTokens || 0;
-    const totalTokens = value || 0;
-    const cacheMiss = Math.max(0, totalTokens - cacheRead - output);
-    const inputTokens = cacheRead + cacheMiss;
-    const hitPct = inputTokens > 0 ? Math.round((cacheRead / inputTokens) * 100) : 0;
-    const missPct = inputTokens > 0 ? 100 - hitPct : 0;
-    
-    delete accordionInner.dataset.signature;
-    accordionInner.innerHTML = `
-      <div class="accordion-content">
-        <div class="accordion-row">
-          <div class="accordion-label">${t('dashboard.tooltip.inputCacheHit')} <span class="accordion-pct">${hitPct}%</span></div>
-          <div class="accordion-value">${formatNumber(cacheRead)}</div>
-        </div>
-        <div class="accordion-row">
-          <div class="accordion-label">${t('dashboard.tooltip.inputCacheMiss')} <span class="accordion-pct">${missPct}%</span></div>
-          <div class="accordion-value">${formatNumber(cacheMiss)}</div>
-        </div>
-        <div class="accordion-row">
-          <div class="accordion-label">${t('dashboard.tooltip.output')}</div>
-          <div class="accordion-value">${formatNumber(output)}</div>
-        </div>
-      </div>
-    `;
+  } else if (kind !== 'session' && value > 0 && (
+    cacheReadTokens !== undefined
+    || outputTokens !== undefined
+    || unclassifiedTokens !== undefined
+    || (Array.isArray(modelRows) && modelRows.length > 0)
+  )) {
+    renderToolDetailAccordion(accordionInner, {
+      name,
+      value,
+      cacheReadTokens,
+      outputTokens,
+      unclassifiedTokens,
+      modelRows,
+      tokenDetailsAvailable: cacheReadTokens !== undefined || outputTokens !== undefined || unclassifiedTokens !== undefined
+    });
     row.classList.add('has-accordion');
     if (isExpanded) row.classList.add('expanded');
   } else {
     accordionInner.replaceChildren();
     delete accordionInner.dataset.signature;
+    delete accordionInner.dataset.detailMode;
     row.classList.remove('has-accordion');
     row.classList.remove('expanded');
   }
+  const rowHead = row.querySelector('.row-head');
   if (row.classList.contains('has-accordion')) {
-    if (row.tabIndex !== 0) row.tabIndex = 0;
-    setAttributeIfChanged(row, 'role', 'button');
-    setAttributeIfChanged(row, 'aria-expanded', String(row.classList.contains('expanded')));
-    setAttributeIfChanged(row, 'aria-label', `${name}, ${t('dashboard.stat.totalTokens')}: ${formatNumber(value)}, ${t('dashboard.stat.totalCost')}: ${formatCost(cost || 0)}`);
+    if (row.hasAttribute('tabindex')) row.removeAttribute('tabindex');
+    if (row.hasAttribute('role')) row.removeAttribute('role');
+    if (row.hasAttribute('aria-expanded')) row.removeAttribute('aria-expanded');
+    if (row.hasAttribute('aria-label')) row.removeAttribute('aria-label');
+    if (rowHead.tabIndex !== 0) rowHead.tabIndex = 0;
+    setAttributeIfChanged(rowHead, 'role', 'button');
+    setAttributeIfChanged(rowHead, 'aria-expanded', String(row.classList.contains('expanded')));
+    const tokenLabel = tokenDataUnavailable === true
+      ? (t('detailTokenUnavailable') || 'Unavailable')
+      : formatNumber(value);
+    const costLabel = tokenDataUnavailable === true ? '' : `, ${t('dashboard.stat.totalCost')}: ${formatCost(cost || 0)}`;
+    setAttributeIfChanged(rowHead, 'aria-label', `${name}, ${t('dashboard.stat.totalTokens')}: ${tokenLabel}${costLabel}`);
   } else {
     if (row.hasAttribute('tabindex')) row.removeAttribute('tabindex');
     if (row.hasAttribute('role')) row.removeAttribute('role');
     if (row.hasAttribute('aria-expanded')) row.removeAttribute('aria-expanded');
     if (row.hasAttribute('aria-label')) row.removeAttribute('aria-label');
+    if (rowHead.hasAttribute('tabindex')) rowHead.removeAttribute('tabindex');
+    if (rowHead.hasAttribute('role')) rowHead.removeAttribute('role');
+    if (rowHead.hasAttribute('aria-expanded')) rowHead.removeAttribute('aria-expanded');
+    if (rowHead.hasAttribute('aria-label')) rowHead.removeAttribute('aria-label');
   }
 }
 
@@ -1838,16 +2079,30 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
     state.rowSignature = '';
     return;
   }
-  const max = Math.max(1, ...rows.map((row) => row.value));
-  const liveMotionSnapshot = !state.periodMotionActive && !state.animateBarsFromZero
-    ? captureBreakdownMotion()
-    : null;
+  const max = barScaleMax(rows);
   const hintText = incompleteHint ? t(incompleteHint) : '';
   const signature = JSON.stringify([state.breakdown, hintText, rows.map((row) => row.key)]);
   const children = Array.from(els.breakdown.children);
   const existingHint = children.find((child) => child.classList.contains('breakdown-incomplete-hint'));
   const existing = new Map(children.filter((child) => child !== existingHint).map((child) => [child.dataset.key, child]));
   const structureChanged = signature !== state.rowSignature;
+  const renderContext = {
+    breakdown: state.breakdown,
+    currency: currentCurrency(),
+    currencyRatesEffective: state.settings?.currencyRatesEffective || null,
+    locale: currentLocale(),
+    showToolIcons: toolIconsEnabled(state.settings?.showToolIcons)
+  };
+  const nextFingerprints = new Map(rows.map((row) => [
+    row.key,
+    rowRenderFingerprint(row, max, renderContext)
+  ]));
+  const rowsChanged = structureChanged || rows.some((row) => (
+    rowRenderFingerprints.get(existing.get(row.key)) !== nextFingerprints.get(row.key)
+  ));
+  const liveMotionSnapshot = rowsChanged && !state.periodMotionActive && !state.animateBarsFromZero
+    ? captureBreakdownMotion()
+    : null;
   if (structureChanged) {
     const nodes = rows.map((row) => existing.get(row.key) || rowTemplate(row));
     if (incompleteHint) {
@@ -1864,21 +2119,15 @@ function renderRows(rows, { incompleteHint = '' } = {}) {
   const current = new Map(Array.from(els.breakdown.children)
     .filter((child) => !child.classList.contains('breakdown-incomplete-hint'))
     .map((child) => [child.dataset.key, child]));
-  const renderContext = {
-    breakdown: state.breakdown,
-    currency: currentCurrency(),
-    currencyRatesEffective: state.settings?.currencyRatesEffective || null,
-    locale: currentLocale(),
-    showToolIcons: toolIconsEnabled(state.settings?.showToolIcons)
-  };
   for (const rowData of rows) {
     const row = current.get(rowData.key);
     if (!row) continue;
-    const fingerprint = rowRenderFingerprint(rowData, max, renderContext);
+    const fingerprint = nextFingerprints.get(rowData.key);
     if (rowRenderFingerprints.get(row) === fingerprint) continue;
-    updateRow(row, { ...rowData, max });
+    updateRow(row, { ...rowData, barValue: rowData.barValue ?? rowData.value, max });
     rowRenderFingerprints.set(row, fingerprint);
   }
+  renderToolDetailFooter();
   if (liveMotionSnapshot) animateBreakdownFrom(liveMotionSnapshot, { duration: 600 });
 }
 
@@ -1921,13 +2170,36 @@ function stableColor(value, colors) {
   return colors[Math.abs(hash) % colors.length];
 }
 
+function fixedPeriodDevices() {
+  if (!fixedPeriodRangesApi.isDerived(state.period)) return state.stats?.devices || [];
+  return fixedPeriodRangesApi.devicesForReadySnapshot(state.fixedPeriodSnapshot, state.period);
+}
+
+function fixedPeriodSources() {
+  return fixedPeriodRangesApi.joinDeviceHistorySources(
+    state.fixedPeriodHistory?.deviceHistories || [],
+    state.stats?.devices || []
+  );
+}
+
+function buildFixedPeriodSourcesSnapshot() {
+  const meta = state.fixedPeriodHistory?.fixedPeriods || {};
+  return fixedPeriodRangesApi.fixedPeriodSnapshotFromDevices(state.period, fixedPeriodSources(), {
+    historyEnabled: state.settings?.historyEnabled !== false,
+    historyAvailable: meta.historyTransportAvailable === true,
+    todayKey: fixedPeriodTodayKey(),
+    locale: currentCalendarLocale()
+  });
+}
+
 function deviceRowsForPeriod() {
   const localId = state.settings?.deviceId || '';
-  return (state.stats?.devices || []).map((device) => {
+  return fixedPeriodDevices().map((device) => {
     const breakdown = deviceBreakdownApi.deviceBreakdownForPeriod(device, state.period, {
       clientLabels,
       clientColors,
-      fallbackColor: clientColors.default
+      fallbackColor: clientColors.default,
+      unattributedLabel: t('dashboard.tooltip.unclassified')
     });
     const period = device.periods?.[state.period] || {};
     const runtime = deviceRuntimeLabel(device.agentRuntime);
@@ -1951,8 +2223,35 @@ function deviceRowsForPeriod() {
   }).sort((a, b) => b.value - a.value);
 }
 
+function attributionComponent(period, field, key) {
+  const aggregateField = {
+    clientCacheReads: 'cacheReadTokens',
+    modelCacheReads: 'cacheReadTokens',
+    clientCacheWrites: 'cacheWriteTokens',
+    modelCacheWrites: 'cacheWriteTokens',
+    clientOutputs: 'outputTokens',
+    modelOutputs: 'outputTokens',
+    clientUnclassifiedTokens: 'unclassifiedTokens',
+    modelUnclassifiedTokens: 'unclassifiedTokens'
+  }[field];
+  return usageAttributionRowsApi.attributionValue(
+    period?.[field],
+    period?.[aggregateField],
+    key
+  );
+}
+
+function periodAttributionRows(period, values, costs) {
+  const rows = usageAttributionRowsApi.attributionRows(values, costs, {
+    totalValue: period?.totalTokens,
+    totalCost: period?.costUsd
+  });
+  return usageAttributionRowsApi.visibleAttributionRows(rows, formatCost);
+}
+
 function toolRowsForPeriod(period) {
-  const clientRows = Object.entries(period?.clients || {}).filter(([, value]) => Number(value) > 0).map(([client, value]) => ({ key: client, name: clientLabels[client] || client, value: Number(value), cost: Number(period?.clientCosts?.[client] || 0), color: clientColors[client] || clientColors.default, stale: false, cacheReadTokens: Number(period?.clientCacheReads?.[client] || 0), cacheWriteTokens: Number(period?.clientCacheWrites?.[client] || 0), outputTokens: Number(period?.clientOutputs?.[client] || 0) }));
+  const clientRows = periodAttributionRows(period, period?.clients, period?.clientCosts)
+    .map(({ key: client, value, cost }) => ({ key: client, name: client === usageAttributionRowsApi.UNATTRIBUTED_KEY ? t('dashboard.tooltip.unclassified') : clientLabels[client] || client, value, cost, color: clientColors[client] || clientColors.default, stale: false, cacheReadTokens: attributionComponent(period, 'clientCacheReads', client), cacheWriteTokens: attributionComponent(period, 'clientCacheWrites', client), outputTokens: attributionComponent(period, 'clientOutputs', client), unclassifiedTokens: attributionComponent(period, 'clientUnclassifiedTokens', client), modelRows: toolDetailsApi.visibleModelRowsForTool(period, client, formatCost) }));
   if (clientRows.length > 0) {
     const usageSortedRows = clientRows.sort((a, b) => b.value - a.value);
     return clientDisplayPreferencesApi.applyClientDisplayPreferences(usageSortedRows, state.settings?.clientDisplayOrder, state.settings?.hiddenClients, KNOWN_CLIENTS, state.settings?.pinnedClients);
@@ -1961,19 +2260,23 @@ function toolRowsForPeriod(period) {
   return deviceRowsForPeriod();
 }
 
-function modelRowsForPeriod(period) {
-  const modelRows = Object.entries(period?.models || {}).filter(([, value]) => Number(value) > 0).map(([model, value]) => ({
+function modelRowsForPeriod(period, rankingMetric = state.settings?.modelRankingMetric) {
+  const modelRows = periodAttributionRows(period, period?.models, period?.modelCosts).map(({ key: model, value, cost, unattributed }) => ({
     key: model,
-    name: model,
-    value: Number(value),
-    cost: Number(period?.modelCosts?.[model] || 0),
+    name: model === usageAttributionRowsApi.UNATTRIBUTED_KEY ? t('dashboard.tooltip.unclassified') : model,
+    value,
+    cost,
+    unattributed,
     color: modelColor(model),
     stale: false,
-    cacheReadTokens: Number(period?.modelCacheReads?.[model] || 0),
-    cacheWriteTokens: Number(period?.modelCacheWrites?.[model] || 0),
-    outputTokens: Number(period?.modelOutputs?.[model] || 0)
+    cacheReadTokens: attributionComponent(period, 'modelCacheReads', model),
+    cacheWriteTokens: attributionComponent(period, 'modelCacheWrites', model),
+    outputTokens: attributionComponent(period, 'modelOutputs', model),
+    unclassifiedTokens: attributionComponent(period, 'modelUnclassifiedTokens', model)
   }));
-  if (modelRows.length > 0) return modelRows.sort((a, b) => b.value - a.value);
+  if (modelRows.length > 0) {
+    return usageAttributionRowsApi.rankRowsWithValues(modelRows, rankingMetric);
+  }
   if (Number(period?.totalTokens || 0) === 0) return [];
   return toolRowsForPeriod(period);
 }
@@ -1985,7 +2288,8 @@ function sessionRowsForPeriod(period) {
     modelColor,
     stableColor,
     fallbackColors: fallbackModelColors,
-    archivedLabel: t('session.archived')
+    archivedLabel: t('session.archived'),
+    nativeSessions: state.stats?.nativeSessions?.[state.period] || {}
   });
   if (rows.length > 0) return rows.sort((a, b) => b.sortTime - a.sortTime || b.value - a.value || b.cost - a.cost || a.name.localeCompare(b.name));
   if (Number(period?.totalTokens || 0) === 0) return [];
@@ -1998,7 +2302,9 @@ function projectRowsForPeriod(period) {
     clientColors,
     stableColor,
     fallbackColors: fallbackModelColors,
-    unknownClientLabel: t('projects.unknownTool')
+    unknownClientLabel: t('projects.unknownTool'),
+    nativeProjects: state.stats?.nativeProjects?.[state.period] || {},
+    nativeSessions: state.stats?.nativeSessions?.[state.period] || {}
   });
 }
 
@@ -2101,7 +2407,7 @@ function limitProviderMeta(provider, provenance = null) {
 function limitProviderPlan(provider) {
   if (provider?.status && provider.status !== 'ok' && !provider.stale) return limitStatusLabel(provider.status, false);
   const label = String(provider?.planLabel || provider?.accountLabel || '').trim();
-  if (label) return limitProviderPresentationApi.limitProviderDisplayLabel(label);
+  if (label) return limitProviderPresentationApi.limitProviderPlanDisplayLabel(provider, label);
   return provider?.status && provider.status !== 'ok' ? limitStatusLabel(provider.status, false) : '';
 }
 
@@ -2913,6 +3219,7 @@ function renderSubscriptionTotal() {
 }
 
 function renderSubscriptionSettings() {
+  if (!isSettingsSurfaceVisible()) return;
   renderSubscriptionNote();
   renderSubscriptionOrphanNotice();
   renderSubscriptionSyncError();
@@ -3563,6 +3870,44 @@ function windowsForKind(provider, kind) {
   return (provider?.windows || []).filter((window) => window.kind === kind);
 }
 
+function codexCanonicalWindow(provider, kind) {
+  return windowsForKind(provider, kind).find((window) => window?.additional !== true) || null;
+}
+
+function codexAdditionalWindowLabel(window, siblingWindows = []) {
+  const name = String(window?.label || '').trim();
+  const period = codexAdditionalWindowPeriodLabel(window);
+  if (!name) return period || 'Additional limit';
+  const normalizedName = name.toLowerCase();
+  const matchingWindowCount = siblingWindows.filter((candidate) => (
+    String(candidate?.label || '').trim().toLowerCase() === normalizedName
+  )).length;
+  const displayName = limitProviderPresentationApi.codexAdditionalQuotaDisplayName(name);
+  return matchingWindowCount > 1 && period ? `${displayName} · ${period}` : displayName;
+}
+
+function codexAdditionalWindowPeriodLabel(window) {
+  const minutes = Number(window?.windowMinutes);
+  if (Number.isFinite(minutes) && minutes > 0 && Number.isInteger(minutes)) {
+    if (minutes === 30 * 24 * 60) return 'Monthly';
+    if (minutes % (7 * 24 * 60) === 0) {
+      const weeks = minutes / (7 * 24 * 60);
+      return weeks === 1 ? 'Weekly' : `${weeks}-week`;
+    }
+    if (minutes % (24 * 60) === 0) {
+      const days = minutes / (24 * 60);
+      return days === 1 ? 'Daily' : `${days}-day`;
+    }
+    if (minutes % 60 === 0) return `${minutes / 60}-hour`;
+    return `${minutes}-minute`;
+  }
+  if (window?.kind === 'daily') return 'Daily';
+  if (window?.kind === 'weekly') return 'Weekly';
+  if (window?.kind === 'billing') return 'Monthly';
+  if (window?.kind === 'session') return 'Session';
+  return '';
+}
+
 function antigravityQuotaGroups(provider) {
   const entries = (provider?.windows || [])
     .filter((window) => window.kind === 'session' || window.kind === 'weekly')
@@ -3587,6 +3932,40 @@ function formatLimitAmount(value) {
   return `$${number.toFixed(2)}`;
 }
 
+function formatCursorSpendValue(window) {
+  const used = optionalFiniteNumber(window?.used);
+  const limit = optionalFiniteNumber(window?.limit);
+  if (used === null) return '';
+  const usedText = formatMoney(used, window?.currency || 'USD');
+  return limit !== null && limit > 0
+    ? `${usedText} / ${formatMoney(limit, window?.currency || 'USD')}`
+    : usedText;
+}
+
+// Zed's billing rows follow the Command Code shape: the headline and bar carry
+// the percentage, and the absolute figure sits under the bar — money for Token
+// Spend, a raw count for metered Edit Predictions. Both follow showLimitUsed,
+// so the number under the bar can never contradict the bar's own direction.
+// Unlimited Edit Predictions have no numbers at all; formatLimitWindowValue
+// already turns their `detail` into the translated headline.
+function formatZedBillingDetail(window) {
+  const used = optionalFiniteNumber(window?.used);
+  const limit = optionalFiniteNumber(window?.limit);
+  if (used === null || limit === null || limit <= 0) return '';
+  const showUsed = Boolean(state.settings?.showLimitUsed);
+  if (window?.limitId === 'zed.edit-predictions') return formatLimitCount(window, showUsed);
+  const currency = window?.currency || 'USD';
+  return `${formatMoney(showUsed ? used : Math.max(0, limit - used), currency)} / ${formatMoney(limit, currency)}`;
+}
+
+function formatBalanceAmount(value, source) {
+  return formatMoney(value, source?.currency);
+}
+
+function formatBalanceSpendAmount(value, balance) {
+  return formatBalanceAmount(value, balance);
+}
+
 // Absolute count for windows that expose units (credits). It follows the same
 // display mode as percent bars: remaining/total in quota mode, used/total in
 // used mode.
@@ -3596,6 +3975,18 @@ function formatLimitCount(window, showUsed = false) {
   if (!Number.isFinite(used) || !Number.isFinite(limit) || limit <= 0) return '';
   const trim = (n) => Number(Math.max(0, n).toFixed(2)).toString();
   return `${trim(showUsed ? used : limit - used)}/${trim(limit)}`;
+}
+
+// Command Code credits are USD, so the count under the bar is money rather than
+// the raw units formatLimitCount prints: "$8.78 / $10.00", or nothing at all for
+// a pool with no allowance (the headline already carries its amount).
+function formatCommandcodeCreditsDetail(window) {
+  const remaining = Number(window?.remaining);
+  const limit = Number(window?.limit);
+  if (!Number.isFinite(remaining) || !Number.isFinite(limit) || limit <= 0) return '';
+  const showUsed = Boolean(state.settings?.showLimitUsed);
+  const value = showUsed ? Math.max(0, limit - remaining) : remaining;
+  return `${formatMoney(value, window?.currency)} / ${formatMoney(limit, window?.currency)}`;
 }
 
 // One-line Overage value: "12.5 credits · $3.20" (credits used, then est. cost).
@@ -3816,14 +4207,13 @@ function limitDetailInfoNode(entries, extraClass = '', ariaLabel = '') {
 function providerSpendNode(balance) {
   const entries = providerSpendEntries(balance);
   if (entries.length === 0) return null;
-  const currency = balance?.currency || 'USD';
   const preferredSummary = entries.filter(([label]) => label === 'Today' || label === 'Month');
   const summaryEntries = preferredSummary.length > 0 ? preferredSummary : entries.slice(0, 2);
-  const formatted = entries.map(([entryLabel, value]) => [entryLabel, formatMoney(value, currency)]);
+  const formatted = entries.map(([entryLabel, value]) => [entryLabel, formatBalanceSpendAmount(value, balance)]);
   return limitNoteRowNode({
     label: 'Spend',
     summary: summaryEntries
-      .map(([label, value]) => `${label} ${formatMoney(value, currency)}`)
+      .map(([label, value]) => `${label} ${formatBalanceSpendAmount(value, balance)}`)
       .join(' · '),
     // Only worth a tooltip when it would say more than the summary already does.
     detailEntries: entries.length > summaryEntries.length ? formatted : null,
@@ -3833,8 +4223,10 @@ function providerSpendNode(balance) {
 
 function thirdPartySpendNode(provider, quotaWindow) {
   const balance = provider?.balance || null;
+  const usage = provider?.usageSummary || null;
   const currency = balance?.currency || 'USD';
   const allTimeSpend = optionalFiniteNumber(balance?.allTimeSpend);
+  const monthSpend = optionalFiniteNumber(balance?.monthSpend);
   const entries = [];
   const total = optionalFiniteNumber(quotaWindow?.limit);
   const requestCount = optionalFiniteNumber(balance?.requestCount);
@@ -3848,12 +4240,39 @@ function thirdPartySpendNode(provider, quotaWindow) {
   if (expiresAt && !Number.isNaN(expiresAt.getTime())) {
     entries.push([t('settings.thirdparty.expires'), expiresAt.toLocaleDateString()]);
   }
-  if (allTimeSpend === null && entries.length === 0) return null;
+  const usageCountEntry = (key, value) => {
+    const number = optionalFiniteNumber(value);
+    if (number !== null) entries.push([t(key), Math.max(0, Math.trunc(number)).toLocaleString()]);
+  };
+  if (usage) {
+    usageCountEntry('settings.thirdparty.monthRequests', usage.requests);
+    usageCountEntry('settings.thirdparty.monthTokens', usage.totalTokens);
+    usageCountEntry('settings.thirdparty.inputTokens', usage.inputTokens);
+    usageCountEntry('settings.thirdparty.outputTokens', usage.outputTokens);
+    const cacheTokens = [usage.cacheReadTokens, usage.cacheCreationTokens]
+      .map(optionalFiniteNumber)
+      .filter((value) => value !== null)
+      .reduce((sum, value) => sum + value, 0);
+    if (cacheTokens > 0) usageCountEntry('settings.thirdparty.cacheTokens', cacheTokens);
+    const averageDurationMs = optionalFiniteNumber(usage.averageDurationMs);
+    if (averageDurationMs !== null) {
+      const duration = averageDurationMs < 1000
+        ? `${Math.round(averageDurationMs)} ms`
+        : `${(averageDurationMs / 1000).toFixed(averageDurationMs < 10000 ? 1 : 0)} s`;
+      entries.push([t('settings.thirdparty.avgResponse'), duration]);
+    }
+    const standardCost = optionalFiniteNumber(usage.standardCost);
+    if (standardCost !== null) entries.push([t('settings.thirdparty.standardCost'), formatMoney(standardCost, currency)]);
+  }
+  if (allTimeSpend === null && monthSpend === null && entries.length === 0) return null;
   // Without a spend figure the row has nothing to summarize, so it retitles
   // itself and leans entirely on the tooltip.
-  const summary = allTimeSpend === null ? '' : `All time ${formatMoney(allTimeSpend, currency)}`;
+  const summary = [
+    ...(monthSpend !== null ? [`Month ${formatMoney(monthSpend, currency)}`] : []),
+    ...(allTimeSpend !== null ? [`All time ${formatMoney(allTimeSpend, currency)}`] : [])
+  ].join(' · ');
   return limitNoteRowNode({
-    label: allTimeSpend === null ? 'Details' : 'Spend',
+    label: summary ? 'Spend' : 'Details',
     summary,
     detailEntries: entries,
     ariaParts: [
@@ -3938,20 +4357,20 @@ function thirdPartyQuotaWindow(provider) {
 function formatLimitWindowValue(window, fillPercent, hasPercent, showUsed) {
   if (hasPercent) return `${formatPercent(fillPercent)} ${limitModeSuffix(showUsed)}`;
   if (!window) return '--';
-  const remaining = Number(window?.remaining);
-  if (Number.isFinite(remaining)) {
+  if (String(window.detail || '').toLowerCase() === 'unlimited') return t('settings.thirdparty.unlimited');
+  const remaining = optionalFiniteNumber(window?.remaining);
+  if (remaining !== null) {
     return window?.showMeter === false ? formatLimitAmount(remaining) : `${formatLimitAmount(remaining)} left`;
   }
-  const limit = Number(window?.limit);
-  if (Number.isFinite(limit)) return `${formatLimitAmount(limit)} cap`;
-  return '';
+  const limit = optionalFiniteNumber(window?.limit);
+  if (limit !== null) return `${formatLimitAmount(limit)} cap`;
+  return window.detail || '';
 }
 
 function formatHomeLimitWindowValue(window, showUsed) {
   if (window?.planStatus === 'expired') return t('limits.mimo.planExpired');
-  // A credits window's headline value is money. Its percentage denominator is
-  // lifetime spend, which reads as a quota but isn't one.
-  if (window?.metric === 'credits') {
+  if (String(window?.detail || '').toLowerCase() === 'unlimited') return t('settings.thirdparty.unlimited');
+  if (isCreditsWindow(window)) {
     if (window.remaining == null) {
       return String(window.detail || '').toLowerCase() === 'unlimited'
         ? t('settings.thirdparty.unlimited')
@@ -3961,6 +4380,16 @@ function formatHomeLimitWindowValue(window, showUsed) {
   }
   const percent = limitFillPercent(window?.remainingPercent, window?.usedPercent, showUsed);
   return `${formatPercent(percent)} ${limitModeSuffix(showUsed)}`;
+}
+
+function creditsBalanceValue(provider, credits) {
+  const amount = creditsAmount(provider, credits);
+  if (amount !== null) {
+    return formatCompactMoney(amount, credits?.currency || provider?.balance?.currency);
+  }
+  return String(credits?.detail || '').toLowerCase() === 'unlimited'
+    ? t('settings.thirdparty.unlimited')
+    : '';
 }
 
 function mimoTokenPlanWindowFromBalance(balance) {
@@ -4062,7 +4491,7 @@ function providersByLimitProviderId(providers) {
 
 function renderLimitProviderMark(id, color) {
   const mark = document.createElement('span');
-  if (clientsWithIcon.has(id)) {
+  if (limitMarksWithIcon.has(id)) {
     mark.className = `limit-icon limit-icon-${id}`;
   } else {
     mark.className = 'dot';
@@ -4213,7 +4642,7 @@ function renderLimitProviderHead(id, label, provider, color, options = {}) {
   titleBlock.className = 'limit-title';
   const name = document.createElement('div');
   name.className = 'limit-name';
-  if (options.showIcon !== false) name.append(renderLimitProviderMark(id, color));
+  if (options.showIcon !== false) name.append(renderLimitProviderMark(options.markId || id, color));
   const title = document.createElement('span');
   title.className = 'limit-name-title';
   title.textContent = options.title || label;
@@ -4366,26 +4795,46 @@ function renderProviderWindows(provider, color) {
   const windows = document.createElement('div');
   windows.className = 'limit-windows';
   if (provider.provider === 'codex') {
-    const session = windowForKind(provider, 'session');
-    const weekly = windowForKind(provider, 'weekly');
+    const session = codexCanonicalWindow(provider, 'session');
+    const weekly = codexCanonicalWindow(provider, 'weekly');
+    const monthly = codexCanonicalWindow(provider, 'billing');
+    const additionalWindows = state.settings?.showCodexAdditionalLimits === false
+      ? []
+      : (provider.windows || []).filter((window) => window?.additional === true);
     if (session) {
       const sessionNode = limitWindowNode(session.label || 'Session', session, color, 0.95);
-      if (!weekly) sessionNode.classList.add('limit-window-wide');
+      if (!weekly && !monthly) sessionNode.classList.add('limit-window-wide');
       windows.append(sessionNode);
     }
     if (weekly) {
       const weeklyNode = limitWindowNode(weekly.label || 'Weekly', weekly, color, 0.68);
-      if (!session) weeklyNode.classList.add('limit-window-wide');
+      if (!session && !monthly) weeklyNode.classList.add('limit-window-wide');
       windows.append(weeklyNode);
+    }
+    if (monthly) {
+      const monthlyNode = limitWindowNode(monthly.label || 'Monthly', monthly, color, 0.68);
+      monthlyNode.classList.add('limit-window-wide');
+      windows.append(monthlyNode);
+    }
+    for (const additional of additionalWindows) {
+      const additionalNode = limitWindowNode(
+        codexAdditionalWindowLabel(additional, additionalWindows),
+        { ...additional, label: '' },
+        color,
+        0.78
+      );
+      additionalNode.classList.add('limit-window-wide');
+      windows.append(additionalNode);
     }
     const resetNode = codexResetCreditsNode(provider.resetCredits);
     if (resetNode) windows.append(resetNode);
   } else if (provider.provider === 'cursor') {
     windows.classList.add('limit-windows-cursor');
-    const billingWindows = windowsForKind(provider, 'billing');
-    const visibleWindows = billingWindows.length > 0 ? billingWindows : [null];
-    for (const billing of visibleWindows) {
-      const node = limitWindowNode('Billing cycle', billing, color, 0.68);
+    for (const quotaWindow of provider.windows || []) {
+      const valueOverride = quotaWindow.metric === 'spend'
+        ? formatCursorSpendValue(quotaWindow)
+        : null;
+      const node = limitWindowNode(quotaWindow.label || 'Quota', quotaWindow, color, 0.68, valueOverride);
       node.classList.add('limit-window-wide');
       windows.append(node);
     }
@@ -4502,9 +4951,18 @@ function renderProviderWindows(provider, color) {
     const balanceLabel = quotaWindow?.label || 'Balance';
     if (balanceAmount !== null) {
       const balanceValue = formatMoney(balanceAmount, currency);
+      // Balance presets without a fixed quota denominator (Sub2API reports the
+      // remaining USD balance plus an observed monthSpend) get the same
+      // display-layer meter DeepSeek uses: balance / (balance + month spend).
+      // Windows that already carry provider percentages pass through unchanged.
+      const meterPercent = creditsMeterPercent(provider, quotaWindow);
       const balanceNode = limitWindowNode(
         balanceLabel,
-        { ...(quotaWindow || { showMeter: false }), label: balanceLabel },
+        {
+          ...(quotaWindow || { showMeter: false }),
+          label: balanceLabel,
+          ...(meterPercent !== null ? { remainingPercent: meterPercent, showMeter: true } : {})
+        },
         color,
         0.95,
         balanceValue
@@ -4599,6 +5057,23 @@ function renderProviderWindows(provider, color) {
       node.classList.add('limit-window-wide');
       windows.append(node);
     }
+  } else if (provider.provider === 'zed') {
+    windows.classList.add('limit-windows-zed');
+    for (const billing of windowsForKind(provider, 'billing')) {
+      const unlimitedEditPredictions = billing?.limitId === 'zed.edit-predictions'
+        && String(billing?.detail || '').trim().toLowerCase() === 'unlimited';
+      const node = limitWindowNode(
+        billing?.label || 'Token Spend',
+        billing,
+        color,
+        0.95,
+        null,
+        formatZedBillingDetail(billing)
+      );
+      node.classList.add('limit-window-wide');
+      if (unlimitedEditPredictions) node.classList.add('limit-window-no-reset');
+      windows.append(node);
+    }
   } else if (provider.provider === 'zai' || provider.provider === 'zaiteam') {
     const fiveHour = windowForKind(provider, 'session');
     const weekly = windowForKind(provider, 'weekly');
@@ -4616,19 +5091,17 @@ function renderProviderWindows(provider, color) {
     }
   } else if (provider.provider === 'volcengine') {
     const session = windowForKind(provider, 'session');
+    const daily = windowForKind(provider, 'daily');
     const weekly = windowForKind(provider, 'weekly');
     const monthly = windowForKind(provider, 'billing');
-    if (session) {
-      const sessionNode = limitWindowNode(session.label || '5-hour', session, color, 0.95);
-      if (!weekly && !monthly && session.label) sessionNode.classList.add('limit-window-wide');
-      windows.append(sessionNode);
-    }
-    if (weekly) windows.append(limitWindowNode('Weekly', weekly, color, 0.68));
-    if (monthly) {
-      const monthlyNode = limitWindowNode('Monthly', monthly, color, 0.68);
-      monthlyNode.classList.add('limit-window-wide');
-      windows.append(monthlyNode);
-    }
+    const nodes = [
+      session && limitWindowNode(session.label || '5-hour', session, color, 0.95),
+      daily && limitWindowNode('Daily', daily, color, 0.78),
+      weekly && limitWindowNode('Weekly', weekly, color, 0.68),
+      monthly && limitWindowNode('Monthly', monthly, color, 0.68)
+    ].filter(Boolean);
+    if (nodes.length % 2 === 1) nodes.at(-1).classList.add('limit-window-wide');
+    windows.append(...nodes);
   } else if (provider.provider === 'kiro') {
     // Kiro exposes monthly credits (plus an optional bonus pool), both billing
     // windows. Render them full-width like Copilot's quota windows.
@@ -4667,6 +5140,61 @@ function renderProviderWindows(provider, color) {
         formatLimitCount(credits, Boolean(state.settings?.showLimitUsed))
       );
       node.classList.add('limit-window-wide');
+      windows.append(node);
+    }
+  } else if (provider.provider === 'workbuddy' || provider.provider === 'trae') {
+    const credits = windowForKind(provider, 'billing');
+    const balance = provider.balance || null;
+    const value = creditsBalanceValue(provider, credits);
+    if (credits && value) {
+      const displayWindow = {
+        ...credits,
+        label: credits.label || 'Credits'
+      };
+      const node = limitWindowNode(
+        displayWindow.label,
+        displayWindow,
+        color,
+        0.95,
+        value
+      );
+      node.classList.add('limit-window-wide');
+      if (!displayWindow.resetsAt && !displayWindow.resetDescription) {
+        node.classList.add('limit-window-no-reset');
+      }
+      windows.append(node);
+      const spendNode = providerSpendNode(balance);
+      if (spendNode) windows.append(spendNode);
+    }
+  } else if (provider.provider === 'commandcode') {
+    // 5-hour and weekly are rate-limit windows (percent); the monthly grant and
+    // any rollover top-up are money, so they get the amount on the right of the
+    // reset line and span the row like Kimi's Monthly.
+    const fiveHour = windowForKind(provider, 'session');
+    const weekly = windowForKind(provider, 'weekly');
+    if (fiveHour) {
+      const node = limitWindowNode('5-hour', fiveHour, color, 0.95);
+      if (!weekly) node.classList.add('limit-window-wide');
+      windows.append(node);
+    }
+    if (weekly) {
+      const node = limitWindowNode('Weekly', weekly, color, 0.68);
+      if (!fiveHour) node.classList.add('limit-window-wide');
+      windows.append(node);
+    }
+    for (const credits of windowsForKind(provider, 'billing')) {
+      const node = limitWindowNode(
+        credits.label || 'Monthly',
+        credits,
+        color,
+        0.5,
+        null,
+        formatCommandcodeCreditsDetail(credits)
+      );
+      node.classList.add('limit-window-wide');
+      // A grant with no known plan allowance has no meter, so there is no bar
+      // for a reset line to sit under either.
+      if (credits.showMeter === false) node.classList.add('limit-window-no-reset');
       windows.append(node);
     }
   } else if (provider.provider === 'kimi') {
@@ -4745,6 +5273,260 @@ function renderProviderWindows(provider, color) {
   return windows;
 }
 
+function codexResetForecastDate(value, options = {}) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const locale = options.locale || currentLocale();
+  const timeZone = options.timeZone;
+  const dayNumber = (input) => {
+    const parts = new Intl.DateTimeFormat('en-US-u-ca-gregory-nu-latn', {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric',
+      ...(timeZone ? { timeZone } : {})
+    }).formatToParts(input);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return Date.UTC(Number(values.year), Number(values.month) - 1, Number(values.day));
+  };
+  const dayDelta = Math.round((dayNumber(date) - dayNumber(new Date(nowMs))) / 86_400_000);
+  if (dayDelta >= -1 && dayDelta <= 1) {
+    const time = new Intl.DateTimeFormat(locale, {
+      hour: 'numeric',
+      minute: '2-digit',
+      ...(locale.startsWith('zh') ? { hourCycle: 'h23' } : {}),
+      ...(timeZone ? { timeZone } : {})
+    }).format(date);
+    const relativeDay = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(dayDelta, 'day');
+    return `${relativeDay} ${time}`;
+  }
+  return expiryDateLabel(date);
+}
+
+function codexResetForecastTimeUntil(value, options = {}) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+  const remainingMs = date.getTime() - nowMs;
+  if (remainingMs <= 0) return '';
+  const locale = options.locale || currentLocale();
+  const hours = remainingMs / 3_600_000;
+  const unit = hours >= 48 ? 'day' : (hours >= 1 ? 'hour' : 'minute');
+  const divisor = unit === 'day' ? 86_400_000 : (unit === 'hour' ? 3_600_000 : 60_000);
+  const amount = Math.max(1, Math.round(remainingMs / divisor));
+  const duration = new Intl.NumberFormat(locale, {
+    style: 'unit',
+    unit,
+    unitDisplay: 'long'
+  }).format(amount);
+  return t('limits.codexResetForecast.approximately', { duration });
+}
+
+function codexResetForecastAge(value) {
+  const date = value ? new Date(value) : null;
+  if (!date || Number.isNaN(date.getTime())) return '';
+  return formatAgo(Math.max(0, Date.now() - date.getTime()));
+}
+
+function codexResetForecastSourceAuthor(value) {
+  const author = String(value || '').trim().replace(/^@+/, '');
+  return author ? `@${author}` : '';
+}
+
+function codexResetForecastPercent(value, locale = currentLocale()) {
+  return new Intl.NumberFormat(locale, { maximumFractionDigits: 2 }).format(value);
+}
+
+function positionCodexResetForecastTooltip(wrap) {
+  const tooltip = wrap?.querySelector('.limit-detail-tooltip');
+  const clip = wrap?.closest('.limits-panel');
+  if (!tooltip || !clip) return;
+  const roomAbove = wrap.getBoundingClientRect().top - clip.getBoundingClientRect().top;
+  tooltip.classList.toggle('is-below', roomAbove < tooltip.offsetHeight + 5);
+}
+
+function codexResetForecastTooltip(forecast) {
+  const entries = [];
+  const disclaimer = t('limits.codexResetForecast.disclaimer');
+  const latestReset = codexResetForecastDate(forecast?.latestResetAt);
+  if (latestReset) {
+    const age = codexResetForecastAge(forecast.latestResetAt);
+    entries.push([t('limits.codexResetForecast.lastReset'), [latestReset, age].filter(Boolean).join(' · ')]);
+  }
+  const source = [
+    codexResetForecastSourceAuthor(forecast?.sourceAuthor),
+    codexResetForecastAge(forecast?.observedAt)
+  ].filter(Boolean).join(' · ');
+  if (source) entries.push([t('limits.codexResetForecast.sourceSignal'), source]);
+  const expiresAt = codexResetForecastDate(forecast?.expiresAt);
+  const expiresIn = codexResetForecastTimeUntil(forecast?.expiresAt);
+  if (expiresAt) {
+    entries.push([
+      t('limits.codexResetForecast.expiresLabel'),
+      [expiresAt, expiresIn].filter(Boolean).join(' · ')
+    ]);
+  }
+  if (forecast?.error && forecast.errorKind !== 'invalid-response') {
+    entries.push([
+      t('limits.codexResetForecast.connectionFailed'),
+      t('limits.codexResetForecast.connectionHelp')
+    ]);
+  }
+  if (forecast?.error) {
+    const lastAttempt = codexResetForecastAge(forecast.checkedAt);
+    if (lastAttempt) entries.push([t('limits.codexResetForecast.lastAttempt'), lastAttempt]);
+  }
+  if (entries.length === 0) return null;
+  const info = limitDetailInfoNode(
+    entries,
+    'codex-reset-forecast-info-wrap',
+    [...entries.map(([label, value]) => `${label}: ${value}`), disclaimer].join(', ')
+  );
+  const tooltip = info.querySelector('.limit-detail-tooltip');
+  if (tooltip) {
+    const footer = document.createElement('span');
+    footer.className = 'codex-reset-forecast-disclaimer';
+    footer.textContent = disclaimer;
+    tooltip.append(footer);
+  }
+  const position = () => positionCodexResetForecastTooltip(info);
+  info.addEventListener('pointerenter', position);
+  info.addEventListener('focusin', position);
+  return info;
+}
+
+function renderCodexResetForecast() {
+  if (state.settings?.codexResetForecastEnabled !== true) return null;
+  const forecast = state.codexResetForecast;
+  const expired = codexResetForecastExpired(forecast);
+  const item = document.createElement('div');
+  item.className = 'codex-reset-forecast';
+  const openButton = document.createElement('button');
+  openButton.type = 'button';
+  openButton.className = 'codex-reset-forecast-open';
+  openButton.addEventListener('click', () => window.tokenMonitor.openExternal?.('https://codex-resets.com/'));
+
+  const head = document.createElement('span');
+  head.className = 'codex-reset-forecast-head';
+  const title = document.createElement('span');
+  title.className = 'codex-reset-forecast-title';
+  const label = document.createElement('span');
+  label.className = 'codex-reset-forecast-label';
+  label.textContent = t('limits.codexResetForecast.title');
+  title.append(label);
+  const forecastInfo = codexResetForecastTooltip(forecast);
+  if (forecastInfo) title.append(forecastInfo);
+  const value = document.createElement('span');
+  value.className = 'codex-reset-forecast-value';
+
+  const detail = document.createElement('span');
+  detail.className = 'codex-reset-forecast-detail';
+  if (state.codexResetForecastBusy && !forecast) {
+    item.classList.add('is-loading');
+    value.textContent = t('limits.codexResetForecast.loading');
+  } else if (forecast?.status === 'active' && !expired) {
+    const chance = forecast.chancePercent;
+    value.textContent = Number.isFinite(chance)
+      ? t('limits.codexResetForecast.chance', { percent: codexResetForecastPercent(chance) })
+      : t('limits.codexResetForecast.signal');
+    const predictedAt = codexResetForecastDate(forecast.predictedAt);
+    const expiresAt = codexResetForecastDate(forecast.expiresAt);
+    detail.textContent = [
+      predictedAt
+        ? t('limits.codexResetForecast.expectedReset', { date: predictedAt })
+        : (expiresAt || ''),
+      forecast.stale ? t('limits.codexResetForecast.stale') : ''
+    ].filter(Boolean).join(' · ');
+  } else if (forecast?.status === 'inactive' || expired) {
+    value.textContent = t('limits.codexResetForecast.noSignal');
+    detail.textContent = forecast.stale ? t('limits.codexResetForecast.stale') : '';
+  } else {
+    item.classList.add('is-unavailable');
+    value.textContent = forecast?.error && forecast.errorKind !== 'invalid-response'
+      ? t('limits.codexResetForecast.connectionFailed')
+      : t('limits.codexResetForecast.unavailable');
+  }
+
+  head.append(title, value);
+  item.append(openButton, head, detail);
+  openButton.title = t('limits.codexResetForecast.openSource');
+  openButton.setAttribute('aria-label', [label.textContent, value.textContent, detail.textContent, t('limits.codexResetForecast.openSource')].filter(Boolean).join(', '));
+  return item;
+}
+
+function appendCodexResetForecast(parent) {
+  const node = renderCodexResetForecast();
+  if (node) parent.append(node);
+}
+
+function codexResetForecastExpired(forecast, nowMs = Date.now()) {
+  if (forecast?.status !== 'active') return false;
+  const expiresAtMs = Date.parse(forecast.expiresAt || '');
+  return Number.isFinite(expiresAtMs) && expiresAtMs <= nowMs;
+}
+
+function clearCodexResetForecastRetryTimer() {
+  if (state.codexResetForecastRetryTimer) clearTimeout(state.codexResetForecastRetryTimer);
+  state.codexResetForecastRetryTimer = null;
+}
+
+function renderCodexResetForecastUpdate() {
+  if (state.breakdown !== 'limits') return null;
+  const surface = visibleStatsSurface();
+  if (surface === 'main') renderLimits();
+  else if (!surface) statsRenderScheduler.request();
+  return surface;
+}
+
+async function refreshCodexResetForecast(options = {}) {
+  if (state.settings?.codexResetForecastEnabled !== true || !window.tokenMonitor.getCodexResetForecast) return;
+  if (state.codexResetForecastBusy) return;
+  clearCodexResetForecastRetryTimer();
+  state.codexResetForecastBusy = true;
+  state.codexResetForecastRequestedAt = Date.now();
+  try {
+    state.codexResetForecast = await window.tokenMonitor.getCodexResetForecast({ force: options.force === true });
+  } catch (error) {
+    state.codexResetForecast = {
+      status: 'unavailable',
+      checkedAt: new Date().toISOString(),
+      error: error.message
+    };
+  } finally {
+    state.codexResetForecastBusy = false;
+    if (renderCodexResetForecastUpdate() === 'main') maybeFetchCodexResetForecast();
+  }
+}
+
+function maybeFetchCodexResetForecast() {
+  if (state.settings?.codexResetForecastEnabled !== true) {
+    clearCodexResetForecastRetryTimer();
+    return;
+  }
+  const nowMs = Date.now();
+  const retryAfterMs = Number(state.codexResetForecast?.retryAfterMs);
+  const refreshMs = Number.isFinite(retryAfterMs) && retryAfterMs > 0
+    ? retryAfterMs
+    : (state.codexResetForecast?.error ? 30 * 1000 : 15 * 60 * 1000);
+  const checkedAtMs = Date.parse(state.codexResetForecast?.checkedAt || '');
+  const fallbackBaseMs = Number(state.codexResetForecastRequestedAt || nowMs);
+  const baseMs = Number.isFinite(checkedAtMs) ? checkedAtMs : fallbackBaseMs;
+  const remainingMs = Math.max(0, baseMs + refreshMs - nowMs);
+  if (state.codexResetForecastBusy) return;
+  if (!state.codexResetForecast || remainingMs <= 0) {
+    clearCodexResetForecastRetryTimer();
+    void refreshCodexResetForecast();
+  } else if (!state.codexResetForecastRetryTimer) {
+    state.codexResetForecastRetryTimer = setTimeout(() => {
+      state.codexResetForecastRetryTimer = null;
+      if (state.breakdown === 'limits' && visibleStatsSurface() === 'main') {
+        if (codexResetForecastExpired(state.codexResetForecast)) renderCodexResetForecastUpdate();
+        maybeFetchCodexResetForecast();
+      }
+    }, remainingMs);
+  }
+}
+
 function renderLimitProviderRow(id, label, provider, color, options = {}) {
   const row = document.createElement('div');
   const classes = ['limit-row'];
@@ -4755,6 +5537,7 @@ function renderLimitProviderRow(id, label, provider, color, options = {}) {
     renderLimitProviderHead(id, label, provider, color, options),
     renderProviderWindows(provider, color)
   );
+  if (id === 'codex' && !options.accountRow) appendCodexResetForecast(row);
   return row;
 }
 
@@ -4767,7 +5550,8 @@ const LIMIT_ACCOUNT_TITLES = {
   codex: codexAccountTitle,
   opencode: opencodeAccountTitle,
   openrouter: (provider, index) => namedApiAccountTitle(provider, index, 'openrouter'),
-  thirdparty: (provider, index) => namedApiAccountTitle(provider, index, 'thirdparty')
+  thirdparty: (provider, index) => namedApiAccountTitle(provider, index, 'thirdparty'),
+  volcengine: (provider, index, providers) => volcenginePlanAccountTitle(provider, index, providers)
 };
 
 function limitAccountTitle(id, provider, index, providerEntries = [provider]) {
@@ -4824,6 +5608,7 @@ function renderCodexAccountGroup(label, providers, color) {
     }));
   });
   row.append(head, accountList);
+  appendCodexResetForecast(row);
   return row;
 }
 
@@ -4873,8 +5658,39 @@ function renderMimoAccountGroup(label, providers, color) {
   return row;
 }
 
+function renderCursorAccountGroup(label, providers, color) {
+  const row = document.createElement('div');
+  row.className = `limit-row limit-row-group${providers.some((provider) => provider.stale) ? ' stale' : ''}`;
+  const groupProvider = { provider: 'cursor', status: 'ok', windows: [], accountGroup: true };
+  const head = renderLimitProviderHead('cursor', label, groupProvider, color, {
+    planText: t('settings.cursor.nAccounts', { count: providers.length }),
+    hideMeta: true
+  });
+  const accountList = document.createElement('div');
+  accountList.className = 'limit-account-list';
+  providers.forEach((provider, index) => {
+    accountList.append(renderLimitProviderRow('cursor', limitAccountTitle('cursor', provider, index, providers), provider, color, {
+      accountRow: true,
+      accountTitle: true,
+      showIcon: false
+    }));
+  });
+  row.append(head, accountList);
+  return row;
+}
+
+function renderAntigravityAccountGroup(label, providers, color) {
+  return renderNamedApiAccountGroup('antigravity', label, providers, color, {
+    groupPlanText: t('settings.antigravity.nAccounts', { count: providers.length })
+  });
+}
+
 function opencodeAccountTitle(provider, index) {
   const name = String(provider?.accountName || '').trim();
+  // The collector's canonical name is shown as-is. This column holds account
+  // names, which are user strings and almost never translated, so a localized
+  // phrase reads as a stray UI label among them — and the plan and source
+  // columns beside it are English for the same reason.
   if (name) return name;
   // Older synced clients put the user-defined profile name in accountLabel.
   // Keep those rows identifiable while new clients carry profile and plan in
@@ -4916,13 +5732,58 @@ function namedApiAccountTitle(provider, index, providerId) {
   return accountName || `Account ${index + 1}`;
 }
 
+// Both Volcengine plans sit on one account, so the row title carries the plan
+// name from accountLabel. accountTitleLabel reads accountName/accountEmail,
+// neither of which these rows have, so without this they would all render as
+// "Account N".
+function volcenginePlanAccountTitle(provider, index, providers) {
+  return String(provider?.accountLabel || '').trim() || limitAccountDefaultTitle(provider, index, providers);
+}
+
+// '' while healthy, because the title already shows the plan and there is no
+// second fact to put here; undefined once it is not, so the head falls back to
+// the status label the same way thirdPartyPlanText does.
+function volcenginePlanRowText(provider) {
+  return provider?.status === 'ok' ? '' : undefined;
+}
+
 function thirdPartyPlanText(provider) {
   if (provider?.status !== 'ok') return undefined;
+  const adapterId = String(provider?.adapterId || '').toLowerCase();
+  if (adapterId === 'newapi-account') return 'New API · Account';
+  if (adapterId === 'newapi-token') return 'New API · API key';
+  if (adapterId === 'sub2api') return 'Sub2API · Account';
+  if (adapterId === 'custom') return 'Custom';
   const planLabel = String(provider?.planLabel || '').toLowerCase();
   if (planLabel === 'account') return 'Account';
   if (planLabel === 'api key') return 'API key';
   if (planLabel === 'custom') return 'Custom';
   return undefined;
+}
+
+const THIRD_PARTY_ADAPTER_VISUALS = Object.freeze({
+  'newapi-account': { color: '#C738FB', markId: 'newapi' },
+  'newapi-token': { color: '#C738FB', markId: 'newapi' },
+  sub2api: { color: '#39D9E7', markId: 'sub2api' },
+  custom: { color: '#8A96A8', markId: 'thirdparty' }
+});
+
+function thirdPartyAdapterVisual(provider, fallbackColor) {
+  return THIRD_PARTY_ADAPTER_VISUALS[String(provider?.adapterId || '').toLowerCase()]
+    || { color: fallbackColor, markId: 'thirdparty' };
+}
+
+function thirdPartyAdapterFamily(provider) {
+  const adapterId = String(provider?.adapterId || '').toLowerCase();
+  if (adapterId === 'newapi-account' || adapterId === 'newapi-token') return 'newapi';
+  if (adapterId === 'sub2api') return 'sub2api';
+  if (adapterId === 'custom') return 'thirdparty';
+  return '';
+}
+
+function thirdPartySharedAdapterFamily(providers) {
+  const families = new Set((providers || []).map(thirdPartyAdapterFamily));
+  return families.size === 1 ? [...families][0] : null;
 }
 
 function renderNamedApiAccountGroup(providerId, label, providers, color, options = {}) {
@@ -4931,19 +5792,23 @@ function renderNamedApiAccountGroup(providerId, label, providers, color, options
   const groupProvider = { provider: providerId, status: 'ok', windows: [], accountGroup: true };
   const head = renderLimitProviderHead(providerId, label, groupProvider, color, {
     planText: options.groupPlanText,
-    hideMeta: true
+    hideMeta: true,
+    ...(options.groupMarkId ? { markId: options.groupMarkId } : {})
   });
   const accountList = document.createElement('div');
   accountList.className = 'limit-account-list';
   providers.forEach((provider, index) => {
+    const providerColor = options.colorForProvider?.(provider) || color;
+    const markId = options.markIdForProvider?.(provider);
     accountList.append(renderLimitProviderRow(
       providerId,
       limitAccountTitle(providerId, provider, index, providers),
       provider,
-      color,
+      providerColor,
       {
         accountRow: true,
-        showIcon: false,
+        showIcon: Boolean(markId),
+        ...(markId ? { markId } : {}),
         ...(options.planTextForProvider
           ? { planText: options.planTextForProvider(provider) }
           : {})
@@ -4961,9 +5826,24 @@ function renderOpenRouterAccountGroup(label, providers, color) {
 }
 
 function renderThirdPartyAccountGroup(label, providers, color) {
+  const sharedFamily = thirdPartySharedAdapterFamily(providers);
   return renderNamedApiAccountGroup('thirdparty', label, providers, color, {
     groupPlanText: t('settings.thirdparty.nAccounts', { count: providers.length }),
-    planTextForProvider: thirdPartyPlanText
+    groupMarkId: sharedFamily || 'thirdparty',
+    planTextForProvider: thirdPartyPlanText,
+    colorForProvider: (provider) => thirdPartyAdapterVisual(provider, color).color,
+    ...(sharedFamily === null
+      ? { markIdForProvider: (provider) => thirdPartyAdapterVisual(provider, color).markId }
+      : {})
+  });
+}
+
+// The Coding Plan and the Agent Plan are two subscriptions on one Volcengine
+// account, so they are rows of one card rather than two provider cards.
+function renderVolcengineAccountGroup(label, providers, color) {
+  return renderNamedApiAccountGroup('volcengine', label, providers, color, {
+    groupPlanText: t('settings.volcengine.nPlans', { count: providers.length }),
+    planTextForProvider: volcenginePlanRowText
   });
 }
 
@@ -4981,22 +5861,58 @@ function renderLimits() {
   const limitsEnabled = state.settings?.limitsEnabled !== false;
   const enabled = enabledLimitProviderSet();
   const providers = providersByLimitProviderId(state.stats?.limits?.providers || []);
-  const nodes = [];
-  const rows = limitProviderOrderApi
+  const orderedProviders = limitProviderOrderApi
     .orderedLimitProviders(LIMIT_PROVIDERS, state.settings?.limitProviderOrder)
     .filter(({ id }) => limitsEnabled && enabled.has(id));
+  const visibleProviderEntries = new Map(orderedProviders.map(({ id }) => {
+    const providerEntries = limitsEnabled && enabled.has(id)
+      ? (providers.get(id) || [{ provider: id, status: state.stats ? missingLimitProviderStatus() : 'unavailable', windows: [] }])
+      : [{ provider: id, status: 'disabled', windows: [] }];
+    return [id, providerEntries];
+  }));
+  const renderSignature = JSON.stringify({
+    locale: currentLocale(),
+    minute: Math.floor(Date.now() / 60000),
+    mode: state.mode,
+    hubUrl: state.settings?.hubUrl || '',
+    deviceId: state.settings?.deviceId || '',
+    settings: [
+      state.settings?.showLimitSource === true,
+      state.settings?.maskLimitAccountEmails === true,
+      state.settings?.showLimitUsed === true,
+      state.settings?.showToolIcons !== false,
+      state.settings?.claudePrepaidBalanceEnabled !== false,
+      state.settings?.codexResetForecastEnabled === true,
+      state.settings?.showCodexAdditionalLimits !== false,
+      state.settings?.currency || '',
+      state.settings?.currencyRatesEffective || null,
+      state.settings?.subscriptions || [],
+      state.settings?.codexManagedAccounts || [],
+      state.codexActiveAccount || null,
+      state.codexSystemSwitchingAccountId || '',
+      state.codexSystemSwitchErrorAccountId || '',
+      state.codexSystemSwitchError || '',
+      state.codexResetForecastBusy,
+      state.codexResetForecast || null
+    ],
+    providerOrder: orderedProviders.map(({ id }) => id),
+    providers: [...visibleProviderEntries.entries()]
+  });
+  if (
+    state.limitPanelRenderSignature === renderSignature
+    && els.limitsPanel.children.length === orderedProviders.length
+  ) {
+    return;
+  }
+  state.limitPanelRenderSignature = renderSignature;
+  const nodes = [];
+  const rows = orderedProviders;
   if (rows.length === 0) {
     els.limitsPanel.replaceChildren();
     return;
   }
   for (const { id, label } of rows) {
-    const providerEnabled = limitsEnabled && enabled.has(id);
-    const providerEntries = providerEnabled
-      ? (providers.get(id) || [{ provider: id, status: state.stats ? missingLimitProviderStatus() : 'unavailable', windows: [] }])
-      : [{ provider: id, status: 'disabled', windows: [] }];
-    const visibleProviders = providerEntries.length > 0
-      ? providerEntries
-      : { provider: id, status: 'disabled', windows: [] };
+    const visibleProviders = visibleProviderEntries.get(id) || [{ provider: id, status: 'disabled', windows: [] }];
     const color = id === 'mimo' ? clientColors.xiaomi : (clientColors[id] || clientColors.default);
     if (id === 'claude' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
       nodes.push(renderClaudeAccountGroup(label, visibleProviders, color));
@@ -5022,13 +5938,29 @@ function renderLimits() {
       nodes.push(renderMimoAccountGroup(label, visibleProviders, color));
       continue;
     }
+    if (id === 'cursor' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
+      nodes.push(renderCursorAccountGroup(label, visibleProviders, color));
+      continue;
+    }
+    if (id === 'antigravity' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
+      nodes.push(renderAntigravityAccountGroup(label, visibleProviders, color));
+      continue;
+    }
+    if (id === 'volcengine' && Array.isArray(visibleProviders) && visibleProviders.length > 1) {
+      nodes.push(renderVolcengineAccountGroup(label, visibleProviders, color));
+      continue;
+    }
     const provider = Array.isArray(visibleProviders) ? visibleProviders[0] : visibleProviders;
+    const thirdPartyVisual = id === 'thirdparty' ? thirdPartyAdapterVisual(provider, color) : null;
     const rowOptions = id === 'codex'
       ? { accountTitle: true, allowSystemSwitch: true }
       : id === 'thirdparty'
-        ? { planText: thirdPartyPlanText(provider) }
+        ? {
+            planText: thirdPartyPlanText(provider),
+            markId: thirdPartyVisual.markId
+          }
         : undefined;
-    nodes.push(renderLimitProviderRow(id, label, provider, color, rowOptions));
+    nodes.push(renderLimitProviderRow(id, label, provider, thirdPartyVisual?.color || color, rowOptions));
   }
   els.limitsPanel.replaceChildren(...nodes);
 }
@@ -5090,6 +6022,7 @@ function serviceStatusIconId(id) {
 }
 
 function renderServiceStatus() {
+  if (!serviceStatusSurfaceVisible()) return;
   if (!els.serviceStatusPanel) return;
   const rows = serviceStatusRows().map((provider) => {
     const row = document.createElement('button');
@@ -5207,12 +6140,13 @@ function updateServiceStatusAgoLabels() {
 }
 
 function onServiceStatusTick() {
-  if (state.breakdown !== 'status') { stopServiceStatusTicker(); return; }
+  if (!serviceStatusSurfaceVisible()) { stopServiceStatusTicker(); return; }
   updateServiceStatusAgoLabels();
   maybeFetchServiceStatus();
 }
 
 function ensureServiceStatusTicker() {
+  if (!serviceStatusSurfaceVisible()) { stopServiceStatusTicker(); return; }
   if (state.serviceStatusTicker) return;
   state.serviceStatusTicker = setInterval(onServiceStatusTick, 1000);
   onServiceStatusTick();
@@ -5224,6 +6158,17 @@ function stopServiceStatusTicker() {
   state.serviceStatusTicker = null;
 }
 
+function applySessionDetailResult(request, options) {
+  if (state.openSession !== request) return;
+  request.renderOptions = options;
+  if (visibleStatsSurface() !== 'main') {
+    if (isRendererWindowHidden()) statsRenderScheduler.request();
+    return;
+  }
+  request.renderOptions = null;
+  renderSessionDetail(options);
+}
+
 async function openSessionDetail({ client, sessionId, sessionCost, title }) {
   const request = { client, sessionId, sessionCost, title, period: state.period, detail: null };
   state.openSession = request;
@@ -5232,10 +6177,10 @@ async function openSessionDetail({ client, sessionId, sessionCost, title }) {
     const detail = await window.tokenMonitor.getSessionDetail({ client, sessionId, period: request.period, sessionCost });
     if (state.openSession === request) {
       request.detail = detail;
-      renderSessionDetail({ detail });
+      applySessionDetailResult(request, { detail });
     }
   } catch (_) {
-    if (state.openSession === request) renderSessionDetail({ error: true });
+    applySessionDetailResult(request, { error: true });
   }
 }
 
@@ -5273,6 +6218,9 @@ function renderSessionDetail({ detail, loading, error } = {}) {
 
   const rows = sessionDetailApi.exchangeRows(detail, { now: new Date(), sortBy: state.detailSort });
   if (rows.length === 0) { container.append(detailNote(t('detailEmpty') || 'No activity in this period.')); return; }
+  if (detail?.tokenDataUnavailable === true) {
+    container.append(detailNote(t('detailTokenDataUnavailable') || 'Token data is unavailable for this session.'));
+  }
 
   const sort = document.createElement('button');
   sort.className = 'detail-sort';
@@ -5311,8 +6259,11 @@ function exchangeNode(row, max) {
   }
   exTitle.append(document.createTextNode(row.title));
   wrap.querySelector('.detail-ex-sub').textContent = row.subtitle;
-  wrap.querySelector('.detail-ex-value').textContent = formatNumber(row.value);
-  wrap.querySelector('.detail-ex-cost').textContent = formatCost(row.cost);
+  const tokensAvailable = row.tokensAvailable !== false;
+  wrap.querySelector('.detail-ex-value').textContent = tokensAvailable
+    ? formatNumber(row.value)
+    : (t('detailTokenUnavailable') || 'Unavailable');
+  wrap.querySelector('.detail-ex-cost').textContent = tokensAvailable ? formatCost(row.cost) : '';
   applyBarScale(wrap.querySelector('.bar-fill'), rowWidth(row.value, max) / 100);
 
   const turnsEl = wrap.querySelector('.detail-turns');
@@ -5338,21 +6289,37 @@ function turnNode(turn) {
   el.innerHTML = '<div class="detail-turn-label"><span class="detail-turn-title"></span><span class="detail-turn-split"></span><span class="detail-turn-tools"></span></div>'
     + '<div class="detail-turn-metrics"><span class="detail-turn-value"></span><span class="detail-turn-cost"></span></div>';
   el.querySelector('.detail-turn-title').textContent = `AI ${turn.label}`;
-  el.querySelector('.detail-turn-split').textContent = split;
+  const tokensAvailable = turn.tokensAvailable !== false;
+  el.querySelector('.detail-turn-split').textContent = tokensAvailable
+    ? split
+    : (t('detailTokenUnavailable') || 'Unavailable');
   el.querySelector('.detail-turn-tools').textContent = turn.tools ? `⊢ ${turn.tools}` : '';
-  el.querySelector('.detail-turn-value').textContent = formatNumber(turn.value);
-  el.querySelector('.detail-turn-cost').textContent = formatCost(turn.cost);
+  el.querySelector('.detail-turn-value').textContent = tokensAvailable
+    ? formatNumber(turn.value)
+    : (t('detailTokenUnavailable') || 'Unavailable');
+  el.querySelector('.detail-turn-cost').textContent = tokensAvailable ? formatCost(turn.cost) : '';
   return el;
 }
 
 let contentReadySignaled = false;
+
+function signalContentReady() {
+  if (contentReadySignaled || !state.settings || !state.stats) return;
+  contentReadySignaled = true;
+  window.tokenMonitor.signalContentReady?.();
+}
 
 function renderTrends() {
   const charts = window.TokenMonitorUsageCharts;
   const previousBars = captureTrendBarMotion();
   const preview = state.stats?.historyPreview || { daily: [], monthly: [], summary: {} };
   const todayTotal = Number(state.stats?.periods?.today?.totalTokens || 0);
-  const { points, metric, labelKey } = charts.selectPreviewSeries(preview, state.period);
+  const fixed = fixedPeriodRangesApi.isDerived(state.period) ? state.fixedPeriodSnapshot : null;
+  // Fixed headline ranges do not collapse the Trends context down to a handful
+  // of bars. Keep the established long-range monthly view; the range-specific
+  // active-time and peak cards below still describe the selected fixed period.
+  const selected = charts.selectPreviewSeries(preview, fixed?.status === 'ready' ? 'allTime' : state.period);
+  const { points, metric, labelKey } = selected;
   const finalPoints = state.period === 'today' ? charts.patchTodayBar(points, todayTotal) : points;
 
   if (finalPoints.length === 0) {
@@ -5364,8 +6331,15 @@ function renderTrends() {
   const titles = finalPoints.map((p) => `${trendShortLabel(p[labelKey], labelKey)} · ${formatCompact(p[metric])}`);
   const svg = charts.sparklineSvg(model, { titles, showZeroMarkers: state.period === 'today' });
 
-  const summary = preview.summary || {};
-  const rangeLabel = state.period === 'allTime' ? t('trends.range.year')
+  const summary = homeOverviewApi.activityStatsForPeriod({
+    period: state.period,
+    fixedSnapshot: fixed,
+    daily: preview.daily,
+    historySummary: preview.summary,
+    todayKey: charts.localDayKey()
+  });
+  const rangeLabel = fixed?.status === 'ready' || state.period === 'allTime'
+    ? t('trends.range.year')
     : state.period === 'month' ? t('trends.range.month') : t('trends.range.week');
   const first = trendShortLabel(finalPoints[0][labelKey], labelKey);
   const last = trendShortLabel(finalPoints[finalPoints.length - 1][labelKey], labelKey);
@@ -5398,6 +6372,31 @@ function viewLabelById(id) {
   return view ? viewLabel(view) : id;
 }
 
+function isSettingsPanelOpen() {
+  return Boolean(els.settingsPanel && !els.settingsPanel.classList.contains('hidden'));
+}
+
+function isRendererWindowHidden() {
+  return document.hidden || !state.windowVisible;
+}
+
+function visibleStatsSurface() {
+  return statsRenderSchedulerApi.visibleStatsSurface(
+    isRendererWindowHidden(),
+    state.floatingBubble.collapsed,
+    isSettingsPanelOpen()
+  );
+}
+
+function isSettingsSurfaceVisible() {
+  return visibleStatsSurface() === 'settings';
+}
+
+function serviceStatusSurfaceVisible() {
+  return visibleStatsSurface() === 'main'
+    && state.breakdown === 'status';
+}
+
 function openHomeSettings() {
   if (!els.settingsPanel) return;
   els.settingsPanel.classList.remove('hidden');
@@ -5406,6 +6405,7 @@ function openHomeSettings() {
   setSettingsSectionExpanded('main', true);
   state.homeSettingsExpanded = true;
   syncSettingsForm();
+  ensureServiceStatusTicker();
   requestAnimationFrame(() => {
     document.getElementById('homeSettingsContainer')?.scrollIntoView({ block: 'nearest' });
   });
@@ -5419,6 +6419,7 @@ function openTrendSettings() {
   setSettingsSectionExpanded('main', true);
   state.trendSettingsExpanded = true;
   syncSettingsForm();
+  ensureServiceStatusTicker();
   requestAnimationFrame(() => {
     document.getElementById('trendSettingsContainer')?.scrollIntoView({ block: 'nearest' });
   });
@@ -5429,22 +6430,28 @@ function openSettingsPanel() {
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   els.settingsPanel.classList.remove('hidden');
   els.shell.classList.add('settings-open');
+  syncSettingsForm();
+  ensureServiceStatusTicker();
   els.shell.style.transform = 'translateZ(0)';
   requestAnimationFrame(() => { els.shell.style.transform = ''; });
 }
 
 function openViewFromTray(viewId) {
   if (!availableBreakdownIds().includes(viewId)) return;
+  const settingsWasOpen = isSettingsPanelOpen();
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   stopWindowShortcutRecording();
   els.settingsPanel?.classList.add('hidden');
   els.shell.classList.remove('settings-open');
   state.openSession = null;
-  renderBreakdownChange(viewId, { allowHidden: true });
+  if (!renderBreakdownChange(viewId, { allowHidden: true }) && settingsWasOpen) render();
+  ensureServiceStatusTicker();
 }
 
 const HOME_HISTORY_MAX_RETRIES = 3;
 const HOME_HISTORY_RETRY_MS = 4000;
+const FIXED_PERIOD_HISTORY_MAX_RETRIES = 3;
+const FIXED_PERIOD_HISTORY_RETRY_MS = 4000;
 
 async function loadHomeHistory() {
   if (state.homeHistoryBusy || !window.tokenMonitor.getDashboardHistory) return;
@@ -5513,6 +6520,228 @@ async function loadHomeHistory() {
       }, HOME_HISTORY_RETRY_MS);
     }
     if (state.breakdown === 'home') render();
+  }
+}
+
+function fixedPeriodTodayKey() {
+  return fixedPeriodRangesApi.localDayKey();
+}
+
+function fixedPeriodHistorySignature() {
+  const inventory = fixedPeriodRangesApi.deviceInventorySignature(state.stats?.devices || []);
+  const revision = state.stats?.deviceHistoryRevision || state.stats?.historyRevision || '';
+  return `${String(revision)}:${fixedPeriodTodayKey()}:${inventory}`;
+}
+
+function fixedPeriodHistoryInventoriesMatch(history) {
+  return fixedPeriodRangesApi.deviceInventorySignature(history?.deviceHistories || [])
+    === fixedPeriodRangesApi.deviceInventorySignature(state.stats?.devices || []);
+}
+
+function buildFixedPeriodSnapshot() {
+  if (!fixedPeriodRangesApi.isDerived(state.period)) return { status: 'native', period: null };
+  if (state.settings?.historyEnabled === false) {
+    return { status: 'unavailable', reason: 'historyDisabled', period: null };
+  }
+  if (!state.fixedPeriodHistoryRequested) {
+    return { status: 'loading', reason: 'loading', period: null };
+  }
+  if (state.fixedPeriodHistoryBusy) {
+    const ready = fixedPeriodRangesApi.readySnapshotForSelection(
+      state.fixedPeriodSnapshot,
+      state.period
+    );
+    return ready
+      ? ready
+      : { status: 'loading', reason: 'loading', period: null };
+  }
+  if (state.fixedPeriodHistoryFailed) {
+    return { status: 'unavailable', reason: 'historyUnavailable', period: null };
+  }
+  return buildFixedPeriodSourcesSnapshot();
+}
+
+async function performFixedPeriodHistoryLoad({ force = false, signature = fixedPeriodHistorySignature() } = {}) {
+  if (!window.tokenMonitor.getDashboardHistory) return false;
+  if (!force && state.fixedPeriodHistoryRequested && state.fixedPeriodHistorySignature === signature) return false;
+  if (state.fixedPeriodHistoryRetrySignature !== signature) {
+    clearTimeout(state.fixedPeriodHistoryRetryTimer);
+    state.fixedPeriodHistoryRetryTimer = null;
+    state.fixedPeriodHistoryRetrySignature = signature;
+    state.fixedPeriodHistoryRetries = 0;
+  }
+  state.fixedPeriodHistoryRequested = true;
+  state.fixedPeriodHistoryBusy = true;
+  state.fixedPeriodHistoryFailed = false;
+  state.fixedPeriodHistorySignature = signature;
+  if (state.fixedPeriodSnapshot?.status !== 'ready') {
+    state.fixedPeriodSnapshot = { status: 'loading', reason: 'loading', period: null };
+  }
+  let fetchedHistory = null;
+  let failed = false;
+  try {
+    fetchedHistory = await window.tokenMonitor.getDashboardHistory({ includeDevices: true });
+  } catch (error) {
+    console.log(`[period] history failed: ${error.message}`);
+    failed = true;
+  } finally {
+    state.fixedPeriodHistoryBusy = false;
+    const requestIsCurrent = fixedPeriodHistorySignature() === signature;
+    if (requestIsCurrent) {
+      state.fixedPeriodHistoryFailed = failed;
+      state.fixedPeriodHistory = failed ? null : fetchedHistory;
+      const inventoryMatches = !failed && fixedPeriodHistoryInventoriesMatch(fetchedHistory);
+      if (inventoryMatches) {
+        state.fixedPeriodHistoryRetries = 0;
+        state.fixedPeriodHistoryRetrySignature = '';
+        clearTimeout(state.fixedPeriodHistoryRetryTimer);
+        state.fixedPeriodHistoryRetryTimer = null;
+      } else if (fixedPeriodRangesApi.shouldRetryFixedPeriodHistory({
+        signature,
+        currentSignature: fixedPeriodHistorySignature(),
+        retries: state.fixedPeriodHistoryRetries,
+        maxRetries: FIXED_PERIOD_HISTORY_MAX_RETRIES,
+        failed,
+        inventoryMatches
+      })) {
+        state.fixedPeriodHistoryRetries += 1;
+        clearTimeout(state.fixedPeriodHistoryRetryTimer);
+        state.fixedPeriodHistoryRetryTimer = setTimeout(() => {
+          state.fixedPeriodHistoryRetryTimer = null;
+          if (fixedPeriodHistorySignature() !== signature) return;
+          if (!state.fixedPeriodHistoryFailed
+            && fixedPeriodHistoryInventoriesMatch(state.fixedPeriodHistory)) return;
+          void loadFixedPeriodHistory({ force: true });
+        }, FIXED_PERIOD_HISTORY_RETRY_MS);
+      }
+      state.fixedPeriodSnapshot = buildFixedPeriodSnapshot();
+      if (state.fixedPeriodSnapshot.status === 'ready' && state.stats?.periods) {
+        state.stats.periods[state.period] = state.fixedPeriodSnapshot.period;
+      }
+    }
+  }
+  return true;
+}
+
+function fixedPeriodHistoryCoordinator() {
+  if (!state.fixedPeriodHistoryCoordinator) {
+    state.fixedPeriodHistoryCoordinator = fixedPeriodRangesApi.createLatestRequestCoordinator({
+      signature: fixedPeriodHistorySignature,
+      load: performFixedPeriodHistoryLoad,
+      onSettled: ({ render: shouldRender }) => {
+        if (shouldRender && fixedPeriodRangesApi.isDerived(state.period)) {
+          statsRenderScheduler.request();
+        }
+      }
+    });
+  }
+  return state.fixedPeriodHistoryCoordinator;
+}
+
+function loadFixedPeriodHistory(options = {}) {
+  const promise = fixedPeriodHistoryCoordinator().request(options);
+  state.fixedPeriodHistoryPromise = promise;
+  const clearPromise = () => {
+    if (state.fixedPeriodHistoryPromise === promise) state.fixedPeriodHistoryPromise = null;
+  };
+  void promise.then(clearPromise, clearPromise);
+  return promise;
+}
+
+function resetFixedPeriodHistoryRetryBudget() {
+  clearTimeout(state.fixedPeriodHistoryRetryTimer);
+  state.fixedPeriodHistoryRetryTimer = null;
+  state.fixedPeriodHistoryRetrySignature = '';
+  state.fixedPeriodHistoryRetries = 0;
+}
+
+function fixedPeriodHistoryNeedsWarmup(options = {}) {
+  return fixedPeriodRangesApi.shouldWarmFixedPeriodHistory({
+    hasStats: Boolean(state.stats),
+    historyEnabled: state.settings?.historyEnabled !== false,
+    apiAvailable: Boolean(window.tokenMonitor.getDashboardHistory),
+    active: fixedPeriodHistoryCoordinator().active(),
+    force: options.force === true,
+    retryFailed: options.retryFailed === true,
+    failed: state.fixedPeriodHistoryFailed,
+    requested: state.fixedPeriodHistoryRequested,
+    loadedSignature: state.fixedPeriodHistorySignature,
+    currentSignature: fixedPeriodHistorySignature()
+  });
+}
+
+async function warmFixedPeriodHistory(options = {}) {
+  if (!fixedPeriodHistoryNeedsWarmup(options)) return false;
+  const explicitRecovery = options.force === true
+    || (options.retryFailed === true && state.fixedPeriodHistoryFailed);
+  if (explicitRecovery) resetFixedPeriodHistoryRetryBudget();
+  await loadFixedPeriodHistory({
+    force: explicitRecovery,
+    renderOnComplete: options.renderOnComplete === true
+  });
+  return true;
+}
+
+function fixedPeriodMessage(snapshot, breakdown = '') {
+  if (snapshot?.status === 'loading') return t('periodRange.loading');
+  if (breakdown === 'session') return t('periodRange.sessionUnavailable');
+  if (breakdown === 'project') return t('periodRange.projectUnavailable');
+  if (snapshot?.reason === 'historyDisabled') return t('periodRange.historyDisabled');
+  if (snapshot?.reason === 'historyUnavailable') return t('periodRange.historyUnavailable');
+  return t('periodRange.historyUnavailable');
+}
+
+function hidePeriodContentForMessage(message) {
+  els.fixedPeriodMessage.textContent = message;
+  els.fixedPeriodMessage.classList.remove('hidden');
+  els.homePanel.classList.add('hidden');
+  els.breakdown.classList.add('hidden');
+  els.serviceStatusPanel?.classList.add('hidden');
+  els.limitsPanel.classList.add('hidden');
+  els.trendsPanel.classList.add('hidden');
+  els.sessionDetail.classList.add('hidden');
+  els.sessionDetailHead.classList.add('hidden');
+}
+
+function periodMenuButtons() {
+  return Array.from(els.monthPeriodMenu?.querySelectorAll('[data-fixed-period]') || []);
+}
+
+function focusPeriodMenuButton(index) {
+  const buttons = periodMenuButtons();
+  if (!buttons.length) return;
+  const target = buttons[Math.max(0, Math.min(buttons.length - 1, Number(index) || 0))];
+  for (const button of buttons) button.tabIndex = button === target ? 0 : -1;
+  target?.focus();
+}
+
+function setPeriodMenuOpen(open, { restoreFocus = false, focus = '' } = {}) {
+  state.periodMenuOpen = Boolean(open);
+  els.monthPeriodMenu?.closest('.titlebar')?.classList.toggle('period-menu-open', state.periodMenuOpen);
+  els.monthPeriodMenu?.classList.toggle('hidden', !state.periodMenuOpen);
+  els.monthPeriodTab?.setAttribute('aria-expanded', String(state.periodMenuOpen));
+  for (const button of periodMenuButtons()) {
+    button.tabIndex = state.periodMenuOpen && button.classList.contains('is-current') ? 0 : -1;
+  }
+  if (state.periodMenuOpen && focus) {
+    const buttons = periodMenuButtons();
+    const current = Math.max(0, buttons.findIndex((button) => button.classList.contains('is-current')));
+    focusPeriodMenuButton(focus === 'first' ? 0 : focus === 'last' ? buttons.length - 1 : current);
+  }
+  if (!state.periodMenuOpen && restoreFocus) els.monthPeriodTab?.focus();
+}
+
+function syncPeriodMenu() {
+  const mode = fixedPeriodRangesApi.slotForSelection(state.period) === 'month'
+    ? fixedPeriodRangesApi.normalizeMonthMode(state.period)
+    : fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
+  for (const button of periodMenuButtons()) {
+    const active = button.dataset.fixedPeriod === mode;
+    button.classList.toggle('is-current', active);
+    button.setAttribute('aria-checked', String(active));
+    if (active) button.setAttribute('aria-current', 'true');
+    else button.removeAttribute('aria-current');
+    button.tabIndex = state.periodMenuOpen && active ? 0 : -1;
   }
 }
 
@@ -5761,6 +6990,12 @@ function homeLimitRows() {
     colors: clientColors,
     limit: state.settings?.homeLimitAccountCount ?? 3,
     sort: hasConfiguredOrder ? 'configured' : 'remaining',
+    accountColor: (provider, id, fallbackColor) => (
+      id === 'thirdparty' ? thirdPartyAdapterVisual(provider, fallbackColor).color : fallbackColor
+    ),
+    accountIcon: (provider, id) => (
+      id === 'thirdparty' ? thirdPartyAdapterVisual(provider, clientColors.thirdparty).markId : id
+    ),
     accountName: (provider, index, providerEntries) => {
       const id = String(provider?.provider || '').trim().toLowerCase();
       const option = providerOptions.find((entry) => entry.id === id);
@@ -5785,6 +7020,7 @@ function homeLimitWindowLabel(window, providerId = '', visibleWindows = []) {
   }
   const key = {
     session: 'home.limit.session',
+    daily: 'home.limit.daily',
     weekly: 'home.limit.weekly',
     billing: 'home.limit.billing',
     monthly: 'home.limit.monthly'
@@ -5809,7 +7045,7 @@ function renderHomeLimitModule() {
     const account = document.createElement('div');
     account.className = 'home-limit-account-head';
     const mark = document.createElement('span');
-    applyHomeListMark(mark, iconKindFor({ key: row.providerId || row.key }, 'limits'), row.color);
+    applyHomeListMark(mark, iconKindFor({ key: row.iconId || row.providerId || row.key }, 'limits'), row.color);
     const name = document.createElement('span');
     name.className = 'home-list-name';
     name.textContent = row.name;
@@ -5862,7 +7098,7 @@ function renderHomeLimitModule() {
 
 function renderHomeModelModule(period) {
   const { module, body } = homeModuleShell('model', t('home.models'), 'model');
-  const rows = homeOverviewApi.homeModelRows(modelRowsForPeriod(period), period?.totalTokens, 5);
+  const rows = homeOverviewApi.homeModelRows(modelRowsForPeriod(period, 'tokens'), period?.totalTokens, 5);
   if (rows.length === 0) {
     const empty = document.createElement('div');
     empty.className = 'home-module-empty';
@@ -5891,9 +7127,9 @@ function renderHomeModelModule(period) {
 }
 
 function homeToolSourceRows(period) {
-  return Object.entries(period?.clients || {}).map(([client, value]) => ({
+  return periodAttributionRows(period, period?.clients, period?.clientCosts).map(({ key: client, value }) => ({
     key: client,
-    name: clientLabels[client] || client,
+    name: client === usageAttributionRowsApi.UNATTRIBUTED_KEY ? t('dashboard.tooltip.unclassified') : clientLabels[client] || client,
     value: Number(value || 0),
     color: clientColors[client] || clientColors.default
   }));
@@ -5931,7 +7167,7 @@ function renderHomeToolModule(period) {
 
 function renderHomeDeviceModule() {
   const { module, body } = homeModuleShell('device', t('home.devices'), 'device');
-  const rows = homeOverviewApi.homeDeviceRows(state.stats?.devices || [], {
+  const rows = homeOverviewApi.homeDeviceRows(fixedPeriodDevices(), {
     localDeviceId: state.settings?.deviceId || '',
     period: state.period,
     limit: 4
@@ -6296,7 +7532,12 @@ function renderHomeTrendsModule() {
   // The key must be the LOCAL day: the period being patched in is local-day scoped.
   const today = charts.localDayKey();
   const todayPeriod = state.stats?.periods?.today;
-  const points = homeOverviewApi.patchDailyToday(rawDaily, today, Number(todayPeriod?.totalTokens || 0), Number(todayPeriod?.costUsd || 0));
+  const points = homeOverviewApi.patchDailyToday(
+    rawDaily,
+    today,
+    Number(todayPeriod?.totalTokens || 0),
+    Number(todayPeriod?.costUsd || 0)
+  );
   const activityLayout = homeOverviewApi.homeActivityHeatmapLayout();
   const heatMetric = state.settings?.heatmapMetric || 'cost';
   const intensityField = heatMetric === 'cost' ? 'costIntensity' : 'tokenIntensity';
@@ -6341,14 +7582,18 @@ function renderHomeTrendsModule() {
   });
   activityScroll.append(activityCanvas);
   const linePoints = charts.clampDaily(points, 45);
-  const summary = homeOverviewApi.homeTrendSummary(linePoints);
+  const trendSummary = homeOverviewApi.homeTrendSummary(linePoints);
+  const longRangePeak = homeOverviewApi.longRangePeakDayTokens({
+    historySummary: history.summary,
+    daily: points
+  });
   const trendHead = document.createElement('div');
   trendHead.className = 'home-trend-head';
   const trendTitle = document.createElement('span');
   trendTitle.textContent = t('home.trend');
   const trendMeta = document.createElement('span');
   trendMeta.className = 'home-module-meta';
-  trendMeta.textContent = t('home.peakTokens', { value: formatCompact(summary.peak) });
+  trendMeta.textContent = t('home.peakTokens', { value: formatCompact(longRangePeak) });
   trendHead.append(trendTitle, trendMeta);
   const model = charts.areaLineChart(linePoints, { width: 300, height: 70, padTop: 4, padRight: 3, padBottom: 4, padLeft: 3, metric: 'tokens', curve: true });
   const plot = document.createElement('div');
@@ -6359,7 +7604,7 @@ function renderHomeTrendsModule() {
   plot.append(chart);
   const dates = document.createElement('div');
   dates.className = 'home-trend-dates';
-  for (const date of summary.dates) {
+  for (const date of trendSummary.dates) {
     const label = document.createElement('span');
     label.className = 'home-trend-date';
     label.textContent = trendShortLabel(date, 'date');
@@ -6429,13 +7674,53 @@ function renderHome() {
 }
 
 function render() {
+  const surface = visibleStatsSurface();
+  if (surface !== 'main') {
+    if (!surface) statsRenderScheduler.request();
+    return;
+  }
   if (!state.stats) return;
+  els.toolDetailFooter.classList.add('hidden');
   renderSessionUsageArchiveStatus();
   ensureBreakdownVisible();
   renderViewSwitcher();
+  const derivedPeriod = fixedPeriodRangesApi.isDerived(state.period);
+  if (derivedPeriod) {
+    const signature = fixedPeriodHistorySignature();
+    if (!state.fixedPeriodHistoryRequested
+      || state.fixedPeriodHistorySignature !== signature
+      || state.fixedPeriodHistoryBusy) {
+      // Joining an existing background preload upgrades its completion into a
+      // visible repaint, so switching to a fixed range cannot remain on loading.
+      void loadFixedPeriodHistory();
+    }
+    state.fixedPeriodSnapshot = buildFixedPeriodSnapshot();
+    if (state.fixedPeriodSnapshot.status === 'ready') {
+      state.stats.periods[state.period] = state.fixedPeriodSnapshot.period;
+    }
+  } else {
+    state.fixedPeriodSnapshot = null;
+  }
   if (state.openSession && state.breakdown !== 'session') { state.openSession = null; els.sessionDetail.classList.add('hidden'); els.sessionDetail.replaceChildren(); els.sessionDetailHead.classList.add('hidden'); els.sessionDetailHead.replaceChildren(); }
   if (state.openSession) { els.sessionDetail.classList.remove('hidden'); els.sessionDetailHead.classList.remove('hidden'); } else { els.sessionDetail.classList.add('hidden'); els.sessionDetailHead.classList.add('hidden'); }
   const period = state.stats.periods?.[state.period] || { totalTokens: 0, costUsd: 0, clients: {} };
+  const fixedUnavailable = derivedPeriod && state.fixedPeriodSnapshot?.status !== 'ready';
+  const detailUnavailable = derivedPeriod
+    && !fixedPeriodRangesApi.supportsBreakdown(state.period, state.breakdown, {
+      deviceHistoriesAvailable: Array.isArray(state.fixedPeriodHistory?.deviceHistories)
+    });
+  if (fixedUnavailable || detailUnavailable) {
+    cancelNumberAnimation();
+    els.totalTokens.textContent = fixedUnavailable ? '—' : formatNumber(Number(period.totalTokens || 0));
+    updateTotalCompact(fixedUnavailable ? 0 : Number(period.totalTokens || 0));
+    els.cost.textContent = fixedUnavailable ? '' : formatCost(period.costUsd || 0);
+    state.currentTotal = fixedUnavailable ? 0 : Number(period.totalTokens || 0);
+    hidePeriodContentForMessage(fixedPeriodMessage(state.fixedPeriodSnapshot, detailUnavailable ? state.breakdown : ''));
+    renderFloatingBubbleContent();
+    signalContentReady();
+    return;
+  }
+  els.fixedPeriodMessage.classList.add('hidden');
   const nextTotal = Number(period.totalTokens || 0);
   const totalChanged = nextTotal !== state.currentTotal;
   if (state.suppressInitialNumberAnimation) {
@@ -6485,6 +7770,7 @@ function render() {
     els.serviceStatusPanel?.classList.add('hidden');
     els.trendsPanel.classList.add('hidden');
     els.limitsPanel.classList.remove('hidden');
+    maybeFetchCodexResetForecast();
     renderLimits();
   } else if (state.breakdown === 'trends') {
     els.homePanel.classList.add('hidden');
@@ -6508,6 +7794,11 @@ function render() {
     els.trendsPanel.classList.add('hidden');
     els.homePanel.classList.add('hidden');
     els.breakdown.classList.add('hidden');
+    if (state.openSession.renderOptions) {
+      const options = state.openSession.renderOptions;
+      state.openSession.renderOptions = null;
+      renderSessionDetail(options);
+    }
   } else {
     els.homePanel.classList.add('hidden');
     els.limitsPanel.classList.add('hidden');
@@ -6527,10 +7818,7 @@ function render() {
   renderFloatingBubbleContent();
   // Tell main the window has painted real content (not the static "0" defaults),
   // so a recreated window can stay hidden until it's populated. See loadWindowFile.
-  if (!contentReadySignaled) {
-    contentReadySignaled = true;
-    window.tokenMonitor.signalContentReady?.();
-  }
+  signalContentReady();
 }
 
 function setStatus(text, isError = false) {
@@ -6643,7 +7931,11 @@ function settleRefreshButtonState(status) {
 // injectLocalDeviceStatus in main.js.
 function overlayAllTimeSessions(stats) {
   if (stats && stats.allTimeSessionsView && stats.periods?.allTime) {
-    stats.periods.allTime.sessions = stats.allTimeSessionsView;
+    const sessions = reasonixSessionGuard?.filterReasonixSyntheticSessions
+      ? reasonixSessionGuard.filterReasonixSyntheticSessions(stats.allTimeSessionsView)
+      : stats.allTimeSessionsView;
+    stats.allTimeSessionsView = sessions;
+    stats.periods.allTime.sessions = sessions;
   }
   return stats;
 }
@@ -6670,8 +7962,22 @@ async function refreshStats(options = {}) {
       state.homeHistorySignature = '';
     }
     applyCodexActiveAccountFromStats();
-    setStatus(statusTextFor(state.mode, state.streamConnected));
-    statsRenderScheduler.request();
+    const forceFixedPeriodHistory = options.forceHistory === true;
+    if (fixedPeriodRangesApi.isDerived(state.period)) {
+      await warmFixedPeriodHistory({
+        force: forceFixedPeriodHistory,
+        retryFailed: forceFixedPeriodHistory,
+        renderOnComplete: false
+      });
+      statsRenderScheduler.request();
+    } else {
+      statsRenderScheduler.request();
+      void warmFixedPeriodHistory({
+        force: forceFixedPeriodHistory,
+        retryFailed: forceFixedPeriodHistory,
+        renderOnComplete: false
+      });
+    }
     maybeUpdateBarsIcon();
     if (feedback) settleRefreshButtonState('refreshed');
   } catch (error) {
@@ -6679,7 +7985,9 @@ async function refreshStats(options = {}) {
     // live-dot tooltip + sync settings line, so keep the header status pill
     // hidden instead of surfacing the raw hub error (e.g. a 404 HTML page).
     console.log(`[refresh] getStats failed: ${error.message}`);
-    setStatus(statusTextFor(state.mode, state.streamConnected));
+    if (!isRendererWindowHidden() && !state.floatingBubble.collapsed) {
+      setStatus(statusTextFor(state.mode, state.streamConnected));
+    }
     if (feedback) settleRefreshButtonState('error');
   } finally {
     if (feedback) state.refreshBusy = false;
@@ -6709,10 +8017,16 @@ function publishViewState() {
 function setPeriod(period) {
   const next = normalizeInitialViewValue(period, viewPeriodValues, state.period);
   if (next === state.period) {
+    if (fixedPeriodRangesApi.isDerived(next) && state.fixedPeriodHistoryFailed) {
+      void warmFixedPeriodHistory({ retryFailed: true, renderOnComplete: true });
+    }
     publishViewState();
     return false;
   }
   state.period = next;
+  if (fixedPeriodRangesApi.isDerived(next) && state.fixedPeriodHistoryFailed) {
+    void warmFixedPeriodHistory({ retryFailed: true, renderOnComplete: true });
+  }
   publishViewState();
   return true;
 }
@@ -6772,6 +8086,14 @@ function applyControlLayout(swapSettingsAndRefresh) {
   }
 }
 
+function applyFontSettings(settings) {
+  const source = { ...(state.settings || {}), ...(settings || {}) };
+  const root = document.documentElement.style;
+  const { interfaceFont, displayFont } = fontSettingsApi.resolveEffectiveFontSettings(source);
+  root.setProperty('--ui-font', interfaceFont);
+  root.setProperty('--display-font', displayFont);
+}
+
 function applyAppearanceSettings(settings) {
   const opacity = glassRenderingApi.renderedGlassOpacity(settings, {
     platform: state.appInfo?.platform,
@@ -6800,6 +8122,7 @@ function applyAppearanceSettings(settings) {
     els.windowsBackdropNote.classList.toggle('hidden', !windowsGlass.showAccentNote);
   }
   applyReduceMotionPreference(settings?.reduceMotion);
+  applyFontSettings(settings);
   // Only full settings objects carry themeColors; glass/zoom preview patches
   // omit it, so we must not wipe theme overrides mid-slider-drag.
   if (settings && 'themeColors' in settings) applyThemeColors(settings.themeColors);
@@ -7135,6 +8458,11 @@ function syncWindowBehaviorControls() {
   });
   els.pinButton.title = title;
   els.pinButton.setAttribute('aria-label', title);
+  // Windows-only, and only meaningful while the widget is pinned above apps:
+  // the other modes never sit over the taskbar in the first place.
+  const taskbarOptionApplies = state.appInfo?.platform === 'win32' && mode === 'floating';
+  els.keepAboveTaskbarRow?.classList.toggle('hidden', !taskbarOptionApplies);
+  if (els.keepAboveTaskbarInput) els.keepAboveTaskbarInput.checked = state.settings?.keepAboveTaskbar === true;
 }
 
 function syncWindowShortcutStatus() {
@@ -7206,9 +8534,14 @@ function handleWindowShortcutRecordKey(event) {
   syncWindowShortcutStatus();
 }
 
-function applyFloatingBubbleState(payload = {}) {
+function applyFloatingBubbleState(payload = {}, options = {}) {
+  const wasCollapsed = state.floatingBubble.collapsed;
   const side = payload?.collapsed && ['left', 'right'].includes(payload.side) ? payload.side : null;
   state.floatingBubble = { collapsed: Boolean(side), side };
+  if (isRendererWindowHidden()) {
+    statsRenderScheduler.request();
+    return;
+  }
   document.documentElement.classList.toggle('floating-bubble-collapsed-left', side === 'left');
   document.documentElement.classList.toggle('floating-bubble-collapsed-right', side === 'right');
   document.body.classList.toggle('floating-bubble-collapsed-left', side === 'left');
@@ -7218,7 +8551,18 @@ function applyFloatingBubbleState(payload = {}) {
     els.floatingBubbleTab.title = title;
     els.floatingBubbleTab.setAttribute('aria-label', title);
   }
-  renderFloatingBubbleContent();
+  if (options.renderContent === false) return;
+  if (wasCollapsed && !state.floatingBubble.collapsed) {
+    if (isSettingsPanelOpen()) {
+      syncSettingsForm();
+      renderConnectionStatus('settings');
+    } else {
+      renderStatsUpdate();
+    }
+  } else {
+    renderFloatingBubbleContent();
+  }
+  ensureServiceStatusTicker();
 }
 
 const BUBBLE_CONTENT_VALUES = ['icon', 'tokens', 'cost', 'both', 'tokensAll', 'costAll', 'bothAll', 'limitsAllSessions', 'bars', 'barsSession', 'barsWeekly', 'barsAllSessions', 'custom'];
@@ -7233,6 +8577,15 @@ function normalizeWindowToggleShortcutValue(value) {
 const BUBBLE_CONTENT_MIN_W = 34;
 const BUBBLE_CONTENT_HEIGHT = 34;
 const BUBBLE_CONTENT_PAD_X = 10;
+const BUBBLE_GENERATED_IMAGE_CSS_HEIGHT = 24;
+let floatingBubbleRenderedBitmapHeight = null;
+
+function currentFloatingBubbleBitmapHeight() {
+  return window.TokenMonitorTrayComposer.floatingBubbleBitmapHeight(
+    window.devicePixelRatio,
+    BUBBLE_GENERATED_IMAGE_CSS_HEIGHT
+  );
+}
 
 function floatingBubbleGeneratedColors() {
   const text = resolvedThemeColor('text');
@@ -7245,12 +8598,17 @@ function floatingBubbleGeneratedColors() {
 }
 
 function renderFloatingBubbleContent() {
+  if (visibleStatsSurface() !== 'bubble') return;
   const el = els.floatingBubbleContent;
   if (!el || !state.floatingBubble.collapsed) return;
   const mode = state.settings?.floatingBubbleContent || 'icon';
   if (window.TokenMonitorTrayText.isGeneratedTrayIconMode(mode)) {
+    // The generated content is a raster image displayed at 24 CSS px. Match its
+    // backing height to the current display scale so Chromium never has to
+    // interpolate already-rasterized text on fractional or high-DPI displays.
+    const bitmapHeight = currentFloatingBubbleBitmapHeight();
     const dataUrl = state.stats
-      ? trayDataUrlForMode(mode, 44, floatingBubbleGeneratedColors(), {
+      ? trayDataUrlForMode(mode, bitmapHeight, floatingBubbleGeneratedColors(), {
           contentOnly: mode === 'barsAllSessions' || mode === 'limitsAllSessions',
           providerContrastHalo: true,
           showProviderBadge: false,
@@ -7265,14 +8623,18 @@ function renderFloatingBubbleContent() {
       img.addEventListener('load', reportFloatingBubbleSize, { once: true });
       img.src = dataUrl;
       el.replaceChildren(img);
+      floatingBubbleRenderedBitmapHeight = bitmapHeight;
       return;
     }
+    floatingBubbleRenderedBitmapHeight = null;
     el.classList.remove('bars');
     el.textContent = (state.stats && window.TokenMonitorTrayText.formatTrayText(state.stats, mode, currentCurrency(), compactTokenDisplayOptions())) || 'Σ';
   } else if (mode === 'icon') {
+    floatingBubbleRenderedBitmapHeight = null;
     el.classList.remove('bars');
     el.textContent = 'Σ';
   } else {
+    floatingBubbleRenderedBitmapHeight = null;
     el.classList.remove('bars');
     el.textContent = state.stats ? (window.TokenMonitorTrayText.formatTrayText(state.stats, mode, currentCurrency(), compactTokenDisplayOptions()) || '0') : '0';
   }
@@ -7291,6 +8653,24 @@ function reportFloatingBubbleSize() {
   }
   window.tokenMonitor.setFloatingBubbleCollapsedSize?.({ width, height: BUBBLE_CONTENT_HEIGHT });
 }
+
+function refreshFloatingBubbleBitmapForDeviceScale() {
+  if (!state.floatingBubble.collapsed || !state.stats) return;
+  const mode = state.settings?.floatingBubbleContent || 'icon';
+  if (!window.TokenMonitorTrayText.isGeneratedTrayIconMode(mode)) return;
+  // Moving the collapsed window between displays can change devicePixelRatio
+  // without changing its CSS dimensions. Repaint only when the backing height
+  // actually changes, which also avoids a size-report/resize loop.
+  const bitmapHeight = currentFloatingBubbleBitmapHeight();
+  if (bitmapHeight !== floatingBubbleRenderedBitmapHeight) renderFloatingBubbleContent();
+}
+
+const stopFloatingBubbleDeviceScaleWatcher = window.TokenMonitorTrayComposer.watchDeviceScaleChanges({
+  matchMedia: typeof window.matchMedia === 'function' ? (query) => window.matchMedia(query) : null,
+  getDevicePixelRatio: () => window.devicePixelRatio,
+  onChange: refreshFloatingBubbleBitmapForDeviceScale
+});
+window.addEventListener('unload', stopFloatingBubbleDeviceScaleWatcher, { once: true });
 
 const HOVER_REVEAL_DELAY_MS = 250;
 const HOVER_COLLAPSE_GRACE_MS = 200;
@@ -7429,6 +8809,94 @@ function appearancePatchFromControls() {
   };
 }
 
+function fontControlsFor(role) {
+  return role === 'display'
+    ? { preset: els.displayFontPreset, input: els.displayFontInput, customRow: els.displayFontCustomRow }
+    : { preset: els.interfaceFontPreset, input: els.interfaceFontInput, customRow: els.interfaceFontCustomRow };
+}
+
+function syncFontCustomRow(role) {
+  const controls = fontControlsFor(role);
+  const isCustom = controls.preset?.value === 'custom';
+  controls.customRow?.classList.toggle('hidden', !isCustom);
+  if (controls.input) controls.input.disabled = !isCustom;
+  updateFontPreview(role);
+}
+
+function fontFamilyFromControls(role) {
+  const controls = fontControlsFor(role);
+  return fontSettingsApi.fontFamilyForPreset(controls.preset?.value || (role === 'display' ? 'follow' : 'app'), controls.input?.value, role);
+}
+
+function fontPreviewForControls(role) {
+  const resolved = fontSettingsApi.resolveEffectiveFontSettings({
+    interfaceFontFamily: fontFamilyFromControls('interface'),
+    displayFontFamily: fontFamilyFromControls('display')
+  });
+  return role === 'display' ? resolved.displayFont : resolved.interfaceFont;
+}
+
+function updateFontPreview(role) {
+  const preview = role === 'display' ? els.displayFontPreview : els.interfaceFontPreview;
+  if (preview) preview.style.fontFamily = fontPreviewForControls(role);
+}
+
+function fontPatchFromControls() {
+  return {
+    interfaceFontFamily: fontFamilyFromControls('interface'),
+    displayFontFamily: fontFamilyFromControls('display')
+  };
+}
+
+function previewFontSettings() {
+  syncFontCustomRow('interface');
+  syncFontCustomRow('display');
+  applyFontSettings(fontPatchFromControls());
+}
+
+async function saveFontSettingsFromControls() {
+  previewFontSettings();
+  await saveSettings(fontPatchFromControls());
+}
+
+function handleFontPresetChange(role) {
+  syncFontCustomRow(role);
+  const controls = fontControlsFor(role);
+  previewFontSettings();
+  if (controls.preset?.value === 'custom') {
+    controls.input?.focus();
+    if (!fontSettingsApi.normalizeFontFamily(controls.input?.value)) return;
+  }
+  void saveFontSettingsFromControls();
+}
+
+async function resetInterfaceFont() {
+  if (els.interfaceFontPreset) els.interfaceFontPreset.value = 'app';
+  if (els.interfaceFontInput) els.interfaceFontInput.value = '';
+  syncFontCustomRow('interface');
+  previewFontSettings();
+  await saveSettings({ interfaceFontFamily: '' });
+}
+
+async function resetDisplayFont() {
+  if (els.displayFontPreset) els.displayFontPreset.value = 'app';
+  if (els.displayFontInput) els.displayFontInput.value = '';
+  syncFontCustomRow('display');
+  previewFontSettings();
+  await saveSettings({ displayFontFamily: fontSettingsApi.DEFAULT_DISPLAY_FONT });
+}
+
+function syncFontSettingsControls() {
+  for (const [role, settingKey] of [['interface', 'interfaceFontFamily'], ['display', 'displayFontFamily']]) {
+    const controls = fontControlsFor(role);
+    const value = fontSettingsApi.normalizeFontFamily(state.settings?.[settingKey]);
+    const preset = fontSettingsApi.presetForFontFamily(value, role);
+    if (controls.preset) controls.preset.value = preset;
+    if (controls.input) controls.input.value = preset === 'custom' ? value : '';
+    syncFontCustomRow(role);
+  }
+}
+
 function syncSliderRow(input) {
   if (!input) return;
   const valueEl = input.closest('.settings-slider-item')?.querySelector('.slider-value');
@@ -7460,11 +8928,12 @@ function syncHubModeUi() {
   els.hubClientFields.classList.toggle('hidden', mode !== 'client');
   els.hubHostFields.classList.toggle('hidden', mode !== 'host');
   if (mode === 'host') {
-    els.hubPortInput.value = String(state.settings.hubHostPort || 17321);
     els.hubSecretInput.value = state.settings.hubHostSecret || '';
     renderHubStatus();
   }
   renderSyncClientStatus();
+  renderHubBuildStatus();
+  syncHubSaveButton();
 }
 
 function renderHubStatus() {
@@ -7507,6 +8976,21 @@ function renderSyncClientStatus() {
   // Empty .hub-status still renders a bordered box, so hide it entirely when
   // there is nothing to show (connected, or not in client mode).
   els.syncClientStatus.hidden = !text;
+}
+
+function renderHubBuildStatus() {
+  if (!els.hubBuildStatus) return;
+  const visible = state.settings?.hubMode === 'client';
+  const model = visible ? hubBuildPresentationApi.presentation(state.hubBuildStatus) : null;
+  if (!model) {
+    els.hubBuildStatus.hidden = true;
+    els.hubBuildStatus.textContent = '';
+    return;
+  }
+  const target = t(model.targetKey);
+  els.hubBuildStatus.textContent = t(model.key, { target });
+  els.hubBuildStatus.className = `hub-status hub-build-status${model.tone ? ` ${model.tone}` : ''}`;
+  els.hubBuildStatus.hidden = false;
 }
 
 function renderHubAddresses(addresses, port) {
@@ -7565,15 +9049,58 @@ async function refreshHubInfo() {
   } catch (_) { /* ignore */ }
 }
 
+const HUB_BUILD_STATUS_REFRESH_TTL_MS = 5 * 60 * 1000;
+let hubBuildStatusRequest = 0;
+let hubBuildStatusLastProbeAt = 0;
+
+function hubBuildStatusRefreshDue(now = Date.now()) {
+  return !hubBuildStatusLastProbeAt
+    || now < hubBuildStatusLastProbeAt
+    || now - hubBuildStatusLastProbeAt >= HUB_BUILD_STATUS_REFRESH_TTL_MS;
+}
+
+async function refreshHubBuildStatus() {
+  const request = ++hubBuildStatusRequest;
+  if (!window.tokenMonitor.getHubBuildStatus || state.settings?.hubMode !== 'client') {
+    hubBuildStatusLastProbeAt = 0;
+    state.hubBuildStatus = null;
+    renderHubBuildStatus();
+    return;
+  }
+  hubBuildStatusLastProbeAt = Date.now();
+  const requestedUrl = String(state.settings.hubUrl || '').trim().replace(/\/$/, '');
+  try {
+    const result = await window.tokenMonitor.getHubBuildStatus();
+    const currentUrl = String(state.settings.hubUrl || '').trim().replace(/\/$/, '');
+    if (request !== hubBuildStatusRequest
+      || currentUrl !== requestedUrl
+      || (result?.hubUrl && result.hubUrl !== currentUrl)) return;
+    state.hubBuildStatus = result;
+  } catch (_) {
+    if (request !== hubBuildStatusRequest) return;
+    state.hubBuildStatus = null;
+  }
+  renderHubBuildStatus();
+}
+
 function syncPeriodTabs() {
   const tabs = Array.from(document.querySelectorAll('.tab'));
-  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.dataset.period === state.period));
+  const activeSlot = fixedPeriodRangesApi.slotForSelection(state.period);
+  const activeIndex = Math.max(0, tabs.findIndex((tab) => tab.dataset.periodSlot === activeSlot));
   document.querySelector('.tabs')?.style.setProperty('--period-index', String(activeIndex));
   for (const tab of tabs) {
-    const active = tab.dataset.period === state.period;
+    const active = tab.dataset.periodSlot === activeSlot;
     tab.classList.toggle('active', active);
     tab.setAttribute('aria-pressed', String(active));
   }
+  if (els.monthPeriodTab) {
+    const mode = activeSlot === 'month'
+      ? fixedPeriodRangesApi.normalizeMonthMode(state.period)
+      : fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
+    els.monthPeriodTab.textContent = fixedPeriodRangesApi.displayLabel(mode);
+    els.monthPeriodTab.dataset.period = mode;
+  }
+  syncPeriodMenu();
 }
 
 function applyInitialBreakdownPreference() {
@@ -7602,18 +9129,190 @@ function renderSessionUsageArchiveStatus() {
     : t('settings.collection.sessionArchiveEmpty');
 }
 
+const HUB_DRAFT_FIELDS = [
+  ['hubUrl', 'hubUrlInput'],
+  ['secret', 'secretInput'],
+  ['deviceId', 'deviceIdInput'],
+  ['hubHostPort', 'hubPortInput']
+];
+const hubDraftDirty = Object.fromEntries(HUB_DRAFT_FIELDS.map(([field]) => [field, false]));
+const hubDraftRevisions = Object.fromEntries(HUB_DRAFT_FIELDS.map(([field]) => [field, 0]));
+let hubSaveBusy = false;
+let hubSaveInFlightRevisions = null;
+
+function hubDraftFieldIsActive(field) {
+  return field !== 'hubHostPort' || state.settings?.hubMode === 'host';
+}
+
+function syncHubDraftDirty(field) {
+  // Inactive fields stop affecting Save, but their drafts must survive mode switches.
+  if (!hubDraftFieldIsActive(field)) return;
+  const submittedRevision = hubSaveInFlightRevisions?.[field];
+  if (submittedRevision !== undefined && hubDraftRevisions[field] > submittedRevision) {
+    hubDraftDirty[field] = true;
+    return;
+  }
+  const inputId = HUB_DRAFT_FIELDS.find(([name]) => name === field)?.[1];
+  const input = inputId ? els[inputId] : null;
+  const savedValue = state.settings?.[field];
+  hubDraftDirty[field] = Boolean(input) && (
+    normalizeHubDraftValue(field, input.value, savedValue) !== normalizeHubDraftValue(field, savedValue)
+  );
+}
+
+function reconcileHubDraftDirtyState() {
+  for (const [field] of HUB_DRAFT_FIELDS) {
+    if (hubDraftDirty[field]) syncHubDraftDirty(field);
+  }
+}
+
+function markHubDraftDirty(field) {
+  const inputId = HUB_DRAFT_FIELDS.find(([name]) => name === field)?.[1];
+  const input = inputId ? els[inputId] : null;
+  if (!input) return;
+  hubDraftRevisions[field] += 1;
+  syncHubDraftDirty(field);
+  syncHubSaveButton();
+}
+
+function syncHubDraftFields() {
+  reconcileHubDraftDirtyState();
+  for (const [field, inputId] of HUB_DRAFT_FIELDS) {
+    const input = els[inputId];
+    if (!input || hubDraftDirty[field]) continue;
+    input.value = field === 'hubHostPort'
+      ? String(state.settings?.hubHostPort || 17321)
+      : state.settings?.[field] || '';
+  }
+  syncHubSaveButton();
+}
+
+// Keep this aligned with main's normalizeHubPort: dirty state must describe
+// the value settings:update will actually persist, including its fallback.
+function normalizeHubDraftPort(value, fallback = 17321) {
+  const fallbackNumber = Math.floor(Number(fallback));
+  const normalizedFallback = Number.isFinite(fallbackNumber) && fallbackNumber >= 1 && fallbackNumber <= 65535
+    ? fallbackNumber
+    : 17321;
+  const number = Math.floor(Number(value));
+  return String(Number.isFinite(number) && number >= 1 && number <= 65535 ? number : normalizedFallback);
+}
+
+function normalizeHubDraftValue(field, value, fallback) {
+  if (field === 'hubHostPort') return normalizeHubDraftPort(value, fallback);
+  if (field === 'secret') return String(value ?? '');
+  return String(value ?? '').trim();
+}
+
+function hubDraftValuesFromInputs() {
+  const values = {};
+  for (const [field, inputId] of HUB_DRAFT_FIELDS) {
+    if (field === 'hubHostPort' && state.settings?.hubMode !== 'host') continue;
+    const input = els[inputId];
+    if (!input) continue;
+    values[field] = normalizeHubDraftValue(field, input.value, state.settings?.[field]);
+  }
+  return values;
+}
+
+function hubDraftValuesFromSettings() {
+  const values = {};
+  for (const [field] of HUB_DRAFT_FIELDS) {
+    if (field === 'hubHostPort' && state.settings?.hubMode !== 'host') continue;
+    values[field] = normalizeHubDraftValue(field, state.settings?.[field]);
+  }
+  return values;
+}
+
+function hubDraftHasChanges() {
+  const draft = hubDraftValuesFromInputs();
+  const saved = hubDraftValuesFromSettings();
+  return Object.keys(draft).some((field) => draft[field] !== saved[field]);
+}
+
+function syncHubSaveButton() {
+  if (!els.saveSettingsButton) return;
+  const busy = hubSaveBusy;
+  els.saveSettingsButton.disabled = busy || !hubDraftHasChanges();
+  if (busy) els.saveSettingsButton.setAttribute('aria-busy', 'true');
+  else els.saveSettingsButton.removeAttribute('aria-busy');
+}
+
+function reconcileHubDraftsAfterSave(submitted, submittedRevisions) {
+  for (const [field, inputId] of HUB_DRAFT_FIELDS) {
+    const input = els[inputId];
+    if (!input) continue;
+    if (!Object.prototype.hasOwnProperty.call(submitted, field)) continue;
+    const current = normalizeHubDraftValue(field, input.value, submitted[field]);
+    if (
+      hubDraftRevisions[field] === submittedRevisions[field]
+      && current === submitted[field]
+    ) {
+      hubDraftDirty[field] = false;
+    }
+  }
+  syncHubDraftFields();
+}
+
+let settingsDomSyncPending = false;
+// Tray-only mode already removes the Dock/taskbar entry, so the row is hidden
+// rather than dimmed while it is on: the way back is the toggle directly above
+// it, and a dead control adds nothing. Hiding is also what keeps it legible
+// below tray-only mode — the only arrangement where this row would sit under
+// that toggle's indented note is one where it is not on screen at all. The
+// checked state is kept in settings so the preference survives the excursion.
+function syncHideAppIconControl(showTrayIcon, trayMode) {
+  if (!els.hideAppIconInput) return;
+  // Windows drops the entry through setSkipTaskbar() and macOS through the
+  // accessory activation policy. Electron exposes neither on Linux — the
+  // toggle would save and change nothing — so the row is not offered there,
+  // and starts hidden until appInfo says which platform this is.
+  const platform = state.appInfo?.platform;
+  const supported = platform === 'win32' || platform === 'darwin';
+  const applies = supported && showTrayIcon && !trayMode;
+  els.hideAppIconInput.checked = applies && state.settings.hideAppIcon === true;
+  els.hideAppIconRow?.classList.toggle('hidden', !applies);
+  els.hideAppIconOptions?.classList.toggle('hidden', !els.hideAppIconInput.checked);
+}
+
 function syncSettingsForm() {
+  if (isRendererWindowHidden()) {
+    applyInitialBreakdownPreference();
+    applyVendorColorOverrides(state.settings.vendorColors);
+    appliedThemeOverrides = themePresetsApi.normalizeOverrides(
+      state.settings.themeColors,
+      themePresetsApi.INTERFACE_COLOR_KEYS
+    );
+    settingsDomSyncPending = true;
+    return;
+  }
+  settingsDomSyncPending = false;
   applySettingsTranslations();
   applyInitialBreakdownPreference();
   syncPeriodTabs();
+  applyVendorColorOverrides(state.settings.vendorColors);
+  applyAppearanceSettings(state.settings);
+  // Drives the header pin button as well as the Settings select, so it has to run
+  // whenever the window is on screen — the pin button is reachable, and changes,
+  // while the Settings panel is closed.
+  syncWindowBehaviorControls();
+  if (!isSettingsSurfaceVisible()) return;
   syncHubModeUi();
   if (els.languageInput) els.languageInput.value = currentLanguage();
+  if (els.periodMonthModeInput) {
+    els.periodMonthModeInput.value = fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode);
+  }
   if (els.currencyInput) els.currencyInput.value = currentCurrency();
+  const modelRankingMetric = usageAttributionRowsApi.normalizeRankingMetric(state.settings?.modelRankingMetric);
+  for (const input of els.modelRankingMetricInputs || []) input.checked = input.value === modelRankingMetric;
   syncCurrencyRateControls();
-  els.hubUrlInput.value = state.settings.hubUrl || '';
-  els.secretInput.value = state.settings.secret || '';
-  els.deviceIdInput.value = state.settings.deviceId || '';
-  els.limitsRefreshInput.value = String(LIMIT_REFRESH_OPTIONS.includes(Number(state.settings.limitsRefreshMs)) ? state.settings.limitsRefreshMs : 300000);
+  syncHubDraftFields();
+  els.limitsRefreshInput.value = state.settings.limitsRefreshMode === 'adaptive'
+    ? 'adaptive'
+    : String(LIMIT_REFRESH_OPTIONS.includes(Number(state.settings.limitsRefreshMs)) ? state.settings.limitsRefreshMs : 300000);
+  if (els.limitsRefreshAdaptiveNote) {
+    els.limitsRefreshAdaptiveNote.classList.toggle('hidden', state.settings.limitsRefreshMode !== 'adaptive');
+  }
   els.showLimitSourceInput.checked = Boolean(state.settings.showLimitSource);
   els.maskLimitAccountEmailsInput.checked = Boolean(state.settings.maskLimitAccountEmails);
   renderSubscriptionSettings();
@@ -7667,13 +9366,13 @@ function syncSettingsForm() {
   if (els.compactTokenUnitsInput) {
     els.compactTokenUnitsInput.value = state.settings.compactTokenUnits === 'localized' ? 'localized' : 'western';
   }
+  syncFontSettingsControls();
   els.compactTokenUnitsRow?.classList.toggle(
     'hidden',
     !supportsLocalizedCompactTokenUnits(currentLocale())
   );
   els.swapSettingsRefreshInput.checked = state.settings.settingsInTitlebar === true;
   els.discordRpcInput.checked = Boolean(state.settings.discordRpcEnabled);
-  syncWindowBehaviorControls();
   els.floatingBubbleInput.checked = state.settings.floatingBubbleEnabled === true;
   const floatingBubbleTrigger = state.settings.floatingBubbleTrigger === 'hover' ? 'hover' : 'click';
   for (const input of els.floatingBubbleTriggerInputs || []) input.checked = input.value === floatingBubbleTrigger;
@@ -7683,6 +9382,7 @@ function syncSettingsForm() {
   if (els.showTrayIconInput) els.showTrayIconInput.checked = showTrayIcon;
   els.trayModeInput.disabled = !showTrayIcon;
   els.trayModeInput.checked = showTrayIcon && Boolean(state.settings.trayMode);
+  syncHideAppIconControl(showTrayIcon, els.trayModeInput.checked);
   els.trayContentInput.value = ['tokens', 'cost', 'both', 'tokensAll', 'costAll', 'bothAll', 'limitsAllSessions', 'bars', 'barsSession', 'barsWeekly', 'barsAllSessions', 'icon', 'custom'].includes(state.settings.trayContent) ? state.settings.trayContent : 'tokens';
   els.trayContentInput.disabled = !showTrayIcon;
   els.showTrayProviderBadgeInput.checked = state.settings.showTrayProviderBadge === true;
@@ -7713,8 +9413,12 @@ function syncSettingsForm() {
   renderExternalProviderStatus('zaiteam');
   renderExternalProviderStatus('volcengine');
   renderExternalProviderStatus('qoder');
+  renderExternalProviderStatus('trae');
+  renderExternalProviderStatus('zed');
+  renderExternalProviderStatus('commandcode');
   renderExternalProviderStatus('kimi');
   renderExternalProviderStatus('ollama');
+  renderAntigravityStatus();
   renderMimoStatus();
   renderCopilotStatus();
   renderViewPreferences();
@@ -7724,17 +9428,12 @@ function syncSettingsForm() {
   renderOpenCodeProfiles();
   renderOpenRouterProfiles();
   renderThirdPartyProfiles();
-  applyVendorColorOverrides(state.settings.vendorColors);
-  applyAppearanceSettings(state.settings);
   buildAppearanceColorControls();
   renderTokscaleStatus();
   renderSettingsAppUpdateRow();
   renderCodexAccounts();
   renderCustomPricing();
   renderCursorStatus();
-  applyFloatingBubbleState(state.floatingBubble);
-  if (state.breakdown === 'limits') renderLimits();
-  else render();
 }
 
 function enabledClientSet() {
@@ -8636,10 +10335,10 @@ function localClientHealth() {
   return localDevice()?.clientHealth || null;
 }
 
-// Single entry point for the tracked-tool detail accordion, mirroring the limits
+// Single entry point for the tool detail accordion, mirroring the limits
 // list: the drag gesture collapses and restores it too, so the class and aria
 // bookkeeping cannot live inside the disclosure's own click handler.
-function setClientHealthExpanded(clientId) {
+function setClientHealthExpanded(clientId, options = {}) {
   state.clientHealthExpanded = clientId || '';
   const rows = els.clientDisplayList?.querySelectorAll('.tool-preference-row[data-client]') || [];
   for (const row of rows) {
@@ -8652,7 +10351,9 @@ function setClientHealthExpanded(clientId) {
     // rebuilt every stats tick — to render nothing. A panel already filled is
     // left alone so a collapse still has something to animate.
     if (open) {
-      loadClientSources(row.dataset.client);
+      const force = options.refreshPlaceholder === true
+        && !clientHealthPresentationApi.hasClientHealth(localClientHealth(), row.dataset.client);
+      loadClientSources(row.dataset.client, { force });
       if (container.childElementCount === 0) {
         fillClientHealthPanel(container, row.dataset.client);
       }
@@ -8680,11 +10381,19 @@ function clientPeriodUsage(clientId) {
 // per snapshot without spending IPC on progressive previews that carry the old
 // envelope.
 function clientSourcesIdentity(clientId) {
-  return {
-    deviceId: String(localDevice()?.deviceId || ''),
-    clientId: String(clientId || ''),
-    observedAt: String(localClientHealth()?.observedAt || '')
-  };
+  const id = String(clientId || '');
+  const health = localClientHealth();
+  const tracked = enabledClientSet().has(id);
+  return clientSourceCacheApi.clientSourceIdentity({
+    deviceId: localDevice()?.deviceId,
+    clientId: id,
+    observedAt: health?.observedAt,
+    tracked,
+    // The health envelope timestamp is shared by every client. Only use it
+    // when this client has its own health entry; otherwise unrelated client
+    // updates must not invalidate this client's source probe cache.
+    hasObservation: clientHealthPresentationApi.hasClientHealth(health, id)
+  });
 }
 
 function exactLocalClientSources(clientId) {
@@ -8749,10 +10458,14 @@ function refillOpenClientHealthPanel() {
 // Everything the panel draws beyond the health record itself: the numbers the
 // app already renders elsewhere, and this machine's own paths.
 function clientHealthDetailFor(clientId) {
-  return clientHealthPresentationApi.clientHealthDetail(localClientHealth(), clientId, {
+  const options = {
     usage: clientPeriodUsage(clientId),
-    sources: localClientSources(clientId)
-  });
+    sources: localClientSources(clientId),
+    collectionState: enabledClientSet().has(clientId) ? 'waiting' : 'notTracked'
+  };
+  const detail = clientHealthPresentationApi.clientHealthDetail(localClientHealth(), clientId, options);
+  if (detail) return detail;
+  return clientHealthPresentationApi.clientHealthPlaceholderDetail(options);
 }
 
 function sameRenderedNode(current, next) {
@@ -8929,7 +10642,7 @@ function relativeDayLabel(day) {
   return day;
 }
 
-function clientHealthActions(clientId) {
+function clientHealthActions(clientId, detail) {
   const actions = document.createElement('div');
   actions.className = 'tool-health-actions';
   const button = (labelKey, onClick) => {
@@ -8941,37 +10654,75 @@ function clientHealthActions(clientId) {
     actions.append(control);
     return control;
   };
+  const syncLockBlocked = clientId === 'antigravity'
+    && detail?.notes?.some((note) => note.code === 'sync-lock-present');
   // The detail is already bound to the exact local device. Renderer mode is a
   // transport state (`local`/`sync`), not topology, so host and client collectors
   // expose the same targeted capability through preload.
-  if (localDevice() && typeof window.tokenMonitor?.rescanClient === 'function') {
+  if (enabledClientSet().has(clientId)
+    && localDevice()
+    && typeof window.tokenMonitor?.rescanClient === 'function') {
     const rescanState = state.clientRescans.snapshot(clientId);
     const feedback = document.createElement('span');
     feedback.className = 'tool-health-action-feedback';
     feedback.dataset.healthAction = 'rescan-feedback';
     feedback.setAttribute('role', 'status');
     feedback.setAttribute('aria-live', 'polite');
-    feedback.textContent = rescanState.failed ? t('settings.tools.health.rescanFailed') : '';
-    const rescan = button('settings.tools.health.rescan', async () => {
-      const requestId = state.clientRescans.begin(clientId);
-      let succeeded = false;
-      try {
-        succeeded = await window.tokenMonitor.rescanClient(clientId) === true;
-        if (succeeded) loadClientSources(clientId, { force: true });
-      } catch (_) {
-        succeeded = false;
-      } finally {
-        state.clientRescans.finish(clientId, requestId, succeeded);
-      }
-    });
-    rescan.dataset.healthAction = 'rescan';
-    rescan.id = `toolHealthRescan-${clientId}`;
-    rescan.disabled = rescanState.pending;
+    const feedbackCode = rescanState.feedbackCode;
+    feedback.textContent = feedbackCode
+      ? t(feedbackCode === 'rescan-failed'
+        ? 'settings.tools.health.rescanFailed'
+        : `settings.tools.health.repairFeedback.${feedbackCode}`)
+      : '';
+    if (syncLockBlocked && typeof window.tokenMonitor?.repairClientSyncLock === 'function') {
+      const repair = button(
+        rescanState.pending ? 'settings.tools.health.repairing' : 'settings.tools.health.repairAndRescan',
+        async () => {
+          if (!window.confirm(t('settings.tools.health.repairConfirm'))) return;
+          const requestId = state.clientRescans.begin(clientId);
+          let result = { ok: false, code: 'repair-failed' };
+          try {
+            result = await window.tokenMonitor.repairClientSyncLock(clientId);
+            if (result?.ok === true) loadClientSources(clientId, { force: true });
+          } catch (_) {
+            result = { ok: false, code: 'repair-failed' };
+          } finally {
+            state.clientRescans.finish(clientId, requestId, result?.ok === true, result?.code || 'repair-failed');
+          }
+        }
+      );
+      repair.classList.add('is-repair');
+      repair.dataset.healthAction = 'repair-sync-lock';
+      repair.id = `toolHealthRepair-${clientId}`;
+      repair.disabled = rescanState.pending;
+    } else {
+      const rescan = button('settings.tools.health.rescan', async () => {
+        const requestId = state.clientRescans.begin(clientId);
+        let succeeded = false;
+        try {
+          succeeded = await window.tokenMonitor.rescanClient(clientId) === true;
+          if (succeeded) loadClientSources(clientId, { force: true });
+        } catch (_) {
+          succeeded = false;
+        } finally {
+          state.clientRescans.finish(clientId, requestId, succeeded, succeeded ? '' : 'rescan-failed');
+        }
+      });
+      rescan.dataset.healthAction = 'rescan';
+      rescan.id = `toolHealthRescan-${clientId}`;
+      rescan.disabled = rescanState.pending;
+    }
     actions.append(feedback);
   }
   // Only where something was actually found: the button opens the first existing
   // root, and offering it for a tool with none would open nothing.
-  if ((exactLocalClientSources(clientId) || []).some((source) => source.dir && source.exists)) {
+  if (syncLockBlocked && typeof window.tokenMonitor?.revealClientSyncLock === 'function') {
+    const revealLock = button('settings.tools.health.revealSyncLock', () => {
+      void window.tokenMonitor.revealClientSyncLock(clientId);
+    });
+    revealLock.dataset.healthAction = 'reveal-sync-lock';
+    revealLock.id = `toolHealthRevealLock-${clientId}`;
+  } else if ((exactLocalClientSources(clientId) || []).some((source) => source.dir && source.exists)) {
     const reveal = button('settings.tools.health.reveal', () => { void window.tokenMonitor?.revealClientSource?.(clientId); });
     reveal.dataset.healthAction = 'reveal';
     reveal.id = `toolHealthReveal-${clientId}`;
@@ -8997,7 +10748,7 @@ function clientHealthPanel(detail, clientId) {
       detail.notes.filter((note) => note.group === group.id)
     ));
   }
-  box.append(groups, clientHealthActions(clientId));
+  box.append(groups, clientHealthActions(clientId, detail));
   return inner;
 }
 
@@ -9048,20 +10799,20 @@ function renderWslPanel() {
       row.append(name, tag);
       els.wslPanel.append(row);
     }
+  }
 
-    if (wslStatusPresentationApi.sqliteHelpClients(status).length > 0) {
-      const help = document.createElement('p');
-      help.className = 'settings-note wsl-panel-help';
-      const message = document.createElement('span');
-      message.textContent = t('settings.collection.wslPanel.sqliteHelp');
-      const guide = document.createElement('button');
-      guide.type = 'button';
-      guide.className = 'inline-link';
-      guide.textContent = t('settings.collection.wslPanel.setupGuide');
-      guide.addEventListener('click', () => window.tokenMonitor.openExternal?.(TOKEN_MONITOR_WSL_SQLITE_GUIDE_URL));
-      help.append(message, ' ', guide);
-      els.wslPanel.append(help);
-    }
+  if (wslStatusPresentationApi.shouldShowSqliteHelp(status)) {
+    const help = document.createElement('p');
+    help.className = 'settings-note wsl-panel-help';
+    const message = document.createElement('span');
+    message.textContent = t('settings.collection.wslPanel.sqliteHelp');
+    const guide = document.createElement('button');
+    guide.type = 'button';
+    guide.className = 'inline-link';
+    guide.textContent = t('settings.collection.wslPanel.setupGuide');
+    guide.addEventListener('click', () => window.tokenMonitor.openExternal?.(TOKEN_MONITOR_WSL_SQLITE_GUIDE_URL));
+    help.append(message, ' ', guide);
+    els.wslPanel.append(help);
   }
 }
 
@@ -9241,9 +10992,9 @@ function renderToolPreferencesNow() {
     const actions = document.createElement('div');
     actions.className = 'tool-preference-actions';
     actions.append(visibility, pin);
-    // A device whose agent predates the health field gets no chevron rather than
-    // one that opens onto an empty panel.
-    const detail = clientHealthPresentationApi.clientHealthDetail(health, id);
+    // Tracked tools use the health snapshot; untracked tools get an on-demand
+    // source view so every row keeps the same disclosure affordance.
+    const detail = clientHealthDetailFor(id);
     if (detail) {
       const expanded = state.clientHealthExpanded === id;
       row.classList.toggle('expanded', expanded);
@@ -9266,7 +11017,10 @@ function renderToolPreferencesNow() {
         loadClientSources(id);
         panel.append(clientHealthPanel(clientHealthDetailFor(id) || detail, id));
       }
-      main.addEventListener('click', () => setClientHealthExpanded(state.clientHealthExpanded === id ? '' : id));
+      main.addEventListener('click', () => {
+        const open = state.clientHealthExpanded !== id;
+        setClientHealthExpanded(open ? id : '', { refreshPlaceholder: open });
+      });
       // Last of the row's controls, where the eye and the pin already are —
       // the label stays plain text, exactly as it reads without this feature.
       actions.append(main);
@@ -9306,8 +11060,27 @@ function renderLimitProviderCheckboxes() {
 }
 
 function renderLimitProviderCheckboxesNow() {
+  const renderSignature = limitProviderSettingsRenderSignature();
+  if (
+    state.limitProviderRenderSignature === renderSignature
+    && els.limitProviderCheckboxes.children.length === LIMIT_PROVIDERS.length
+  ) {
+    return;
+  }
   const previousRows = Array.from(els.limitProviderCheckboxes.children);
   const focusedId = document.activeElement?.id || '';
+  const reusableSettingInputs = new Map();
+  for (const row of previousRows) {
+    const providerId = row.dataset?.provider || '';
+    const settings = LIMIT_PROVIDER_SETTINGS[providerId] || [];
+    const inputs = row.querySelectorAll?.(
+      ':scope > .accordion-animated-container .limit-provider-settings-list > .settings-item > input[type="checkbox"]'
+    ) || [];
+    settings.forEach((setting, index) => {
+      const input = inputs[index];
+      if (input) reusableSettingInputs.set(`${providerId}:${setting.key}`, input);
+    });
+  }
   const enabled = enabledLimitProviderSet();
   const collected = new Map((state.stats?.limits?.providers || []).map((provider) => [provider.provider, provider]));
   const providers = limitProviderOrderApi.orderedLimitProviders(LIMIT_PROVIDERS, state.settings?.limitProviderOrder);
@@ -9359,8 +11132,11 @@ function renderLimitProviderCheckboxesNow() {
     }
     for (const tagInfo of tagInfos) {
       if ((detected || !isEnabled) && tagInfo.kind === 'status') continue;
+      // Account groups own their configuration summary on the right. Avoid
+      // repeating "Not set up" beside the same account state, as with Codex.
+      if (accountGroup && provider.status === 'notConfigured' && tagInfo.kind === 'status') continue;
       const duplicatesInlineSetup = tagInfo.kind === 'capability'
-        && ((connectionDetailKey && tagInfo.label === 'Auto')
+        && ((connectionDetailKey && !accountGroup && tagInfo.label === 'Auto')
           || (accountGroup && tagInfo.label === 'Manual login'));
       if (duplicatesInlineSetup) continue;
       const tag = document.createElement('span');
@@ -9374,7 +11150,9 @@ function renderLimitProviderCheckboxesNow() {
     const actions = document.createElement('span');
     actions.className = 'limit-provider-actions';
     const accountStatus = limitProviderAccountStatus(id);
-    if (connectionDetailKey) {
+    // Multi-account providers use this space for their account summary. Their
+    // automatic collection support stays with the capability tags on the left.
+    if (connectionDetailKey && !accountGroup) {
       const mode = document.createElement('span');
       mode.className = 'cursor-status-pill limit-provider-mode-pill';
       mode.textContent = t('settings.limits.connection.autoDetect');
@@ -9410,7 +11188,7 @@ function renderLimitProviderCheckboxesNow() {
         accountGroup.classList.add('limit-provider-account-group');
       }
       if (connectionDetailKey) optionsInner.append(limitProviderConnectionDetail(connectionDetailKey));
-      if (settings) optionsInner.append(limitProviderSettingsList(id, settings));
+      if (settings) optionsInner.append(limitProviderSettingsList(id, settings, reusableSettingInputs));
       optionsContainer.append(optionsInner);
       const toggleOptions = () => {
         const opening = state.limitProviderSettingsExpanded !== id;
@@ -9437,10 +11215,57 @@ function renderLimitProviderCheckboxesNow() {
     // destination must already be connected, so the row is mounted first.
     moveLimitProviderLiveNode(actions, accountStatus, disclosureIcon);
     moveLimitProviderLiveNode(optionsInner, accountGroup);
+    // OpenCode's one setting is an off-by-default fallback estimate. Rendered by
+    // the shared path it lands above the account list, reading as the first
+    // thing to set up; it belongs below the accounts, collapsed. Reparented
+    // rather than special-cased in the shared renderer so the setting keeps its
+    // change tracking and re-render signature.
+    if (id === 'opencode') moveOpenCodeLocalFallbackSetting();
   }
   for (const row of previousRows) row.remove();
   if (focusedId && document.activeElement === document.body) {
     document.getElementById(focusedId)?.focus({ preventScroll: true });
+  }
+  state.limitProviderRenderSignature = renderSignature;
+}
+
+// Moves the OpenCode local-DB toggle into its own collapsed group beneath the
+// account list, and keeps that group's status pill in sync with the setting.
+function moveOpenCodeLocalFallbackSetting() {
+  const target = document.getElementById('opencodeLocalFallbackInner');
+  const list = document.querySelector('#limitProviderOptions-opencode .limit-provider-settings-list');
+  if (!target) return;
+  if (list) {
+    if (list.parentElement !== target) moveLimitProviderLiveNode(target, list);
+    // The shared renderer builds a fresh settings list on every pass, so moving
+    // without clearing stacks one copy of the toggle per re-render.
+    for (const stale of [...target.children]) if (stale !== list) stale.remove();
+    // The group header already names the setting, so the item's own title would
+    // read twice. Dropping it alone leaves the label cell empty and the switch
+    // adrift, so the description moves into that cell and becomes the label.
+    for (const item of target.querySelectorAll('.settings-item')) {
+      item.querySelector('.settings-item-title')?.remove();
+      const cell = item.querySelector('.settings-item-text');
+      const desc = item.querySelector('.settings-item-desc');
+      if (cell && desc && desc.parentElement !== cell) cell.append(desc);
+    }
+  }
+
+  const pill = document.getElementById('opencodeLocalFallbackStatus');
+  if (pill) {
+    const on = (state.settings || {}).opencodeLocalLimitsEnabled === true;
+    pill.textContent = t(on ? 'settings.appearance.motion.on' : 'settings.appearance.motion.off');
+  }
+
+  const toggle = document.getElementById('opencodeLocalFallbackSettingsToggle');
+  if (toggle && !toggle.dataset.wired) {
+    toggle.dataset.wired = '1';
+    // The shared helper, so this collapses exactly like every other group
+    // instead of a second hand-rolled implementation of the same thing.
+    toggle.addEventListener('click', () => setAccountGroupExpanded(
+      'opencodeLocalFallback',
+      toggle.getAttribute('aria-expanded') !== 'true'
+    ));
   }
 }
 
@@ -9493,10 +11318,71 @@ const LIMIT_PROVIDER_SETTINGS = {
     descKey: 'settings.limits.prepaidBalanceDesc',
     requiresConfiguredKey: 'claudeWebCookieConfigured',
     defaultValue: true
+  }],
+  codex: [{
+    key: 'showCodexAdditionalLimits',
+    titleKey: 'settings.limits.codexAdditionalLimits',
+    descKey: 'settings.limits.codexAdditionalLimitsDesc',
+    defaultValue: true
+  }, {
+    key: 'codexResetForecastEnabled',
+    titleKey: 'settings.limits.codexResetForecast',
+    descKey: 'settings.limits.codexResetForecastDesc',
+    defaultValue: false
+  }],
+  opencode: [{
+    key: 'opencodeLocalLimitsEnabled',
+    titleKey: 'settings.limits.opencodeLocalLimits',
+    descKey: 'settings.limits.opencodeLocalLimitsDesc',
+    defaultValue: false
   }]
 };
 
-function limitProviderSettingsList(providerId, settings) {
+function limitProviderSettingsRenderSignature() {
+  const settings = state.settings || {};
+  const providerSignature = (provider) => {
+    return [
+      provider?.provider || '',
+      provider?.status || '',
+      Boolean(provider?.stale),
+      provider?.source || '',
+      provider?.sourceDetail || '',
+      provider?.sourceDeviceId || '',
+      provider?.accountKey || ''
+    ];
+  };
+  const deviceSignature = (device) => [
+    device?.deviceId || '',
+    device?.hostname || '',
+    (device?.limits?.providers || []).map((provider) => [
+      provider?.provider || '',
+      provider?.status || '',
+      provider?.accountKey || ''
+    ])
+  ];
+  const settingValues = Object.values(LIMIT_PROVIDER_SETTINGS).flatMap((entries) => entries.map((setting) => [
+    setting.key,
+    settings[setting.key],
+    setting.requiresConfiguredKey ? Boolean(settings[setting.requiresConfiguredKey]) : true
+  ]));
+  return JSON.stringify({
+    locale: currentLocale(),
+    mode: state.mode,
+    hubUrl: settings.hubUrl || '',
+    settings: [
+      settings.limitsEnabled !== false,
+      [...enabledLimitProviderSet()].sort(),
+      limitProviderOrderApi.orderedLimitProviders(LIMIT_PROVIDERS, settings.limitProviderOrder).map(({ id }) => id),
+      settings.deviceId || '',
+      settingValues,
+      state.limitProviderSettingsExpanded
+    ],
+    providers: (state.stats?.limits?.providers || []).map(providerSignature),
+    devices: (state.stats?.devices || []).map(deviceSignature)
+  });
+}
+
+function limitProviderSettingsList(providerId, settings, reusableInputs = null) {
   const list = document.createElement('div');
   list.className = 'settings-nested-list limit-provider-settings-list';
   for (const setting of settings) {
@@ -9512,18 +11398,27 @@ function limitProviderSettingsList(providerId, settings) {
     title.className = 'settings-item-title';
     title.textContent = t(setting.titleKey);
     copy.append(title);
-    const input = document.createElement('input');
+    const inputKey = `${providerId}:${setting.key}`;
+    const existingInput = reusableInputs?.get(inputKey);
+    const input = existingInput || document.createElement('input');
     input.type = 'checkbox';
     const available = !setting.requiresConfiguredKey || Boolean(state.settings?.[setting.requiresConfiguredKey]);
-    input.checked = available && state.settings?.[setting.key] !== false;
+    const storedValue = state.settings?.[setting.key];
+    const defaultValue = setting.defaultValue !== false;
+    input.checked = available && (storedValue === undefined ? defaultValue : storedValue !== false);
     input.disabled = !available;
     item.classList.toggle('is-disabled', !available);
-    input.addEventListener('change', async () => {
-      await saveSettings({ [setting.key]: input.checked });
-      // Switching this off hides the row immediately; the request it also stops
-      // would otherwise only be skipped on the next refresh.
-      renderLimits();
-    });
+    if (!existingInput) {
+      input.addEventListener('change', async () => {
+        await saveSettings({ [setting.key]: input.checked });
+        if (setting.key === 'codexResetForecastEnabled') {
+          clearCodexResetForecastRetryTimer();
+          state.codexResetForecast = null;
+          state.codexResetForecastRequestedAt = 0;
+          if (input.checked) await refreshCodexResetForecast({ force: true });
+        }
+      });
+    }
     const desc = document.createElement('span');
     desc.className = 'settings-note settings-item-desc';
     desc.textContent = t(setting.descKey);
@@ -9538,7 +11433,12 @@ async function onToolTrackingToggle() {
     .filter((cb) => cb.checked)
     .map((cb) => cb.dataset.client);
   await saveSettings({ clients: checked.join(',') });
-  await refreshStats({ force: true });
+  // `clients` is usage-structural, so settings:update schedules a latest-wins
+  // usage reconciliation and the eventual collector runs its own full tick.
+  // Forcing a refresh here would bypass that settling boundary, duplicate the
+  // scan, and drag an all-provider limits refresh along. The extra stats pushes
+  // would then repaint the whole settings panel under the pointer, which is what
+  // made this checkbox stall while the eye and pin next to it did not (#471).
 }
 
 async function onClientVisibilityToggle(clientId) {
@@ -9812,6 +11712,7 @@ async function showAllViews() {
 }
 
 function preserveSettingsPanelScroll(callback) {
+  if (isRendererWindowHidden()) return callback();
   const panel = els.settingsPanel;
   if (!panel || panel.classList.contains('hidden')) return callback();
   const scrollTop = panel.scrollTop;
@@ -9832,6 +11733,7 @@ function preserveSettingsPanelScroll(callback) {
 }
 
 async function saveSettings(patch) {
+  const settingsPushRevision = state.settingsPushRevision;
   try {
     state.settings = await window.tokenMonitor.updateSettings(patch);
   } catch (error) {
@@ -9839,12 +11741,20 @@ async function saveSettings(patch) {
     try { state.settings = await window.tokenMonitor.getSettings(); } catch (_) {}
     applyEffectiveCurrencyRates();
     preserveSettingsPanelScroll(syncSettingsForm);
+    if (!isSettingsSurfaceVisible()) statsRenderScheduler.request();
     restartTimer();
     maybeUpdateBarsIcon();
     throw error;
   }
   applyEffectiveCurrencyRates();
-  preserveSettingsPanelScroll(syncSettingsForm);
+  // settings:update broadcasts the normalized settings before resolving the
+  // IPC request. The push already ran the full sync; repeating it when the
+  // promise resolves rebuilds the provider rows a second time and restarts
+  // their accordion/switch layout transition.
+  if (state.settingsPushRevision === settingsPushRevision) {
+    preserveSettingsPanelScroll(syncSettingsForm);
+    if (!isSettingsSurfaceVisible()) statsRenderScheduler.request();
+  }
   restartTimer();
   maybeUpdateBarsIcon();
   if (patch.showTrayProviderBadge !== undefined) {
@@ -9895,7 +11805,26 @@ window.addEventListener('blur', () => {
 });
 
 async function init() {
+  // Subscribed before the app-info round trip, not after: a theme flipped while
+  // that call is in flight would otherwise be missed until the next flip. The
+  // seeded value then only fills in when no push has already answered.
+  let systemUiThemeSeeded = false;
+  const applySystemUiTheme = (dark) => {
+    systemUiThemeSeeded = true;
+    if (dark === state.systemDarkUi) return;
+    state.systemDarkUi = dark;
+    // Two caches carry baked-in ink and both go stale here: the generated bitmap
+    // for the current mode, and the provider bitmaps main holds for the usage
+    // modes. Repainting only the first leaves a black provider icon sitting on a
+    // taskbar that just turned dark.
+    void maybeUpdateBarsIcon();
+    void deliverTrayProviderIcons();
+  };
+  window.tokenMonitor.onSystemUiThemePush?.((payload) => applySystemUiTheme(payload?.dark === true));
   try { state.appInfo = await window.tokenMonitor.getAppInfo?.(); } catch (_) {}
+  // Seeding assigns directly: the rest of init delivers both icon sets anyway,
+  // and settings have not loaded yet, so repainting from here would only churn.
+  if (!systemUiThemeSeeded) state.systemDarkUi = state.appInfo?.systemDarkUi === true;
   if (els.aboutVersion) els.aboutVersion.textContent = state.appInfo?.version ? `v${state.appInfo.version}` : '—';
   state.settings = await window.tokenMonitor.getSettings();
   applyEffectiveCurrencyRates();
@@ -9915,8 +11844,10 @@ async function init() {
     state.settings.startAtLogin = Boolean(state.appInfo.loginItemOpenAtLogin);
   }
   syncSettingsForm();
+  diagnosticsPanel?.render();
   publishViewState();
   await refreshHubInfo();
+  void refreshHubBuildStatus();
   await refreshTokscaleStatus();
   restartTimer();
   try {
@@ -9935,11 +11866,26 @@ async function init() {
 }
 
 for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => {
+  tab.addEventListener('click', (event) => {
+    const slot = tab.dataset.periodSlot || tab.dataset.period;
+    const activeSlot = fixedPeriodRangesApi.slotForSelection(state.period);
+    if (slot === 'month' && activeSlot === 'month') {
+      event.stopPropagation();
+      setPeriodMenuOpen(!state.periodMenuOpen, { focus: state.periodMenuOpen ? '' : 'current' });
+      return;
+    }
+    setPeriodMenuOpen(false);
+    const targetPeriod = slot === 'month'
+      ? fixedPeriodRangesApi.normalizeMonthMode(state.settings?.periodMonthMode)
+      : tab.dataset.period;
     const snapshot = captureBreakdownMotion();
-    if (!setPeriod(tab.dataset.period)) return;
+    if (!setPeriod(targetPeriod)) return;
     syncPeriodTabs();
-    if (state.openSession) openSessionDetail(state.openSession);
+    if (state.openSession && fixedPeriodRangesApi.supportsBreakdown(state.period, 'session')) {
+      openSessionDetail(state.openSession);
+    } else if (state.openSession) {
+      state.openSession = null;
+    }
     state.rowSignature = '';
     state.periodMotionActive = true;
     render();
@@ -9948,22 +11894,86 @@ for (const tab of document.querySelectorAll('.tab')) {
   });
 }
 
+for (const button of els.monthPeriodMenu?.querySelectorAll('[data-fixed-period]') || []) {
+  button.addEventListener('click', async (event) => {
+    event.stopPropagation();
+    const selection = fixedPeriodRangesApi.normalizeMonthMode(button.dataset.fixedPeriod);
+    setPeriodMenuOpen(false, { restoreFocus: true });
+    const changed = setPeriod(selection);
+    state.settings.periodMonthMode = selection;
+    syncPeriodTabs();
+    syncPeriodMenu();
+    if (changed) {
+      state.rowSignature = '';
+      state.periodMotionActive = true;
+      render();
+      state.periodMotionActive = false;
+    }
+    await saveSettings({ periodMonthMode: selection });
+  });
+}
+
+els.monthPeriodTab?.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+  event.preventDefault();
+  setPeriodMenuOpen(true, { focus: event.key === 'ArrowUp' ? 'last' : 'first' });
+});
+
+els.monthPeriodMenu?.addEventListener('keydown', (event) => {
+  if (event.key === 'Tab') {
+    setPeriodMenuOpen(false);
+    return;
+  }
+  const buttons = periodMenuButtons();
+  const currentIndex = buttons.findIndex((button) => button === event.target);
+  fixedPeriodRangesApi.handlePeriodMenuNavigation(event, {
+    currentIndex,
+    itemCount: buttons.length,
+    focusIndex: focusPeriodMenuButton
+  });
+});
+
+els.periodMonthModeInput?.addEventListener('change', async () => {
+  const selection = fixedPeriodRangesApi.normalizeMonthMode(els.periodMonthModeInput.value);
+  state.settings.periodMonthMode = selection;
+  if (fixedPeriodRangesApi.slotForSelection(state.period) === 'month') setPeriod(selection);
+  syncPeriodTabs();
+  render();
+  await saveSettings({ periodMonthMode: selection });
+});
+
+document.addEventListener('click', (event) => {
+  if (!state.periodMenuOpen) return;
+  if (els.monthPeriodMenu?.contains(event.target) || els.monthPeriodTab?.contains(event.target)) return;
+  setPeriodMenuOpen(false);
+});
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && state.periodMenuOpen) {
+    event.preventDefault();
+    setPeriodMenuOpen(false, { restoreFocus: true });
+  }
+});
+
 els.breakdown.addEventListener('click', (event) => {
   if (state.breakdown !== 'session') return;
   const rowEl = event.target.closest('.row');
   if (!rowEl) return;
   const key = rowEl.dataset.key || '';            // "session:<client>:<sessionId>"
   const client = rowEl.dataset.client || '';
-  if (client !== 'claude' && client !== 'codex' && client !== 'opencode') return;
+  if (client !== 'claude' && client !== 'codex' && client !== 'opencode' && client !== 'reasonix' && client !== 'dsh') return;
+  if (client === 'reasonix' && rowEl.dataset.detailUnavailable === 'true') return;
   const match = key.match(/^session:([^:]+):(.+)$/);
   if (!match) return;
-  const sessionId = match[2];
+  const sessionId = client === 'reasonix' ? `reasonix:${match[2]}` : match[2];
   const period = state.stats?.periods?.[state.period];
-  const session = period?.sessions?.[`${client}:${sessionId}`];
+  const session = client === 'reasonix'
+    ? state.stats?.nativeSessions?.[state.period]?.[sessionId]
+    : period?.sessions?.[`${client}:${sessionId}`];
   openSessionDetail({
     client,
     sessionId,
-    sessionCost: Number(session?.costUsd || 0),
+    sessionCost: client === 'reasonix' ? Number(session?.reportedCostUsd || 0) : Number(session?.costUsd || 0),
     title: rowEl.querySelector('.row-title')?.textContent || ''
   });
 });
@@ -9974,25 +11984,41 @@ els.pinButton.addEventListener('click', () => {
 els.settingsButton.addEventListener('click', (event) => {
   if (state.viewSwitcherOpen) setViewSwitcherOpen(false);
   els.settingsPanel.classList.toggle('hidden');
-  const settingsOpen = !els.settingsPanel.classList.contains('hidden');
+  const settingsOpen = isSettingsPanelOpen();
+  if (settingsOpen) syncSettingsForm();
+  else render();
   if (!settingsOpen) stopWindowShortcutRecording();
   els.shell.classList.toggle('settings-open', settingsOpen);
   if (!settingsOpen && event.detail > 0) els.settingsButton.blur();
   els.shell.style.transform = 'translateZ(0)';
   requestAnimationFrame(() => { els.shell.style.transform = ''; });
+  ensureServiceStatusTicker();
 });
 els.saveSettingsButton.addEventListener('click', async () => {
-  const patch = {
-    hubUrl: els.hubUrlInput.value.trim(),
-    secret: els.secretInput.value,
-    deviceId: els.deviceIdInput.value.trim()
-  };
-  if (state.settings.hubMode === 'host') {
-    patch.hubHostPort = Number(els.hubPortInput.value) || 17321;
+  if (hubSaveBusy || !hubDraftHasChanges()) return;
+  hubSaveBusy = true;
+  syncHubSaveButton();
+  try {
+    const submittedHubFields = hubDraftValuesFromInputs();
+    const patch = { ...submittedHubFields };
+    if (Object.prototype.hasOwnProperty.call(submittedHubFields, 'hubHostPort')) {
+      patch.hubHostPort = Number(submittedHubFields.hubHostPort) || 17321;
+    }
+    const submittedHubRevisions = Object.fromEntries(
+      Object.keys(submittedHubFields).map((field) => [field, hubDraftRevisions[field]])
+    );
+    hubSaveInFlightRevisions = submittedHubRevisions;
+    await saveSettings(patch);
+    reconcileHubDraftsAfterSave(submittedHubFields, submittedHubRevisions);
+    await refreshHubInfo();
+    void refreshHubBuildStatus();
+    await refreshStats();
+  } finally {
+    hubSaveInFlightRevisions = null;
+    syncHubDraftFields();
+    hubSaveBusy = false;
+    syncHubSaveButton();
   }
-  await saveSettings(patch);
-  await refreshHubInfo();
-  await refreshStats();
 });
 
 els.hubModeOptions.addEventListener('change', async (event) => {
@@ -10000,6 +12026,7 @@ els.hubModeOptions.addEventListener('change', async (event) => {
   if (!(target instanceof HTMLInputElement) || target.name !== 'hubMode') return;
   await saveSettings({ hubMode: target.value });
   await refreshHubInfo();
+  void refreshHubBuildStatus();
   await refreshStats();
 });
 
@@ -10030,6 +12057,14 @@ els.languageInput?.addEventListener('change', async () => {
 els.currencyInput?.addEventListener('change', async () => {
   await saveSettings({ currency: els.currencyInput.value });
 });
+
+for (const input of els.modelRankingMetricInputs || []) {
+  input.addEventListener('change', async () => {
+    if (!input.checked) return;
+    await saveSettings({ modelRankingMetric: usageAttributionRowsApi.normalizeRankingMetric(input.value) });
+    render();
+  });
+}
 
 els.currencyRateModeAuto?.addEventListener('change', async () => {
   if (!els.currencyRateModeAuto.checked) return;
@@ -10077,11 +12112,17 @@ els.secretPasteButton?.addEventListener('click', async () => {
     const text = await navigator.clipboard.readText();
     if (text) {
       els.secretInput.value = text.trim();
+      markHubDraftDirty('secret');
     }
   } catch (_) {}
 });
 els.limitsRefreshInput.addEventListener('change', async () => {
-  await saveSettings({ limitsRefreshMs: Number(els.limitsRefreshInput.value) });
+  // Adaptive carries its own baseline, so the stored interval is left alone and
+  // comes back unchanged when a fixed option is selected again.
+  const value = els.limitsRefreshInput.value;
+  await saveSettings(value === 'adaptive'
+    ? { limitsRefreshMode: 'adaptive' }
+    : { limitsRefreshMode: 'fixed', limitsRefreshMs: Number(value) });
   await refreshStats({ force: true });
 });
 els.showLimitSourceInput.addEventListener('change', async () => {
@@ -10147,6 +12188,9 @@ for (const input of els.showLimitUsedInputs || []) {
   input.addEventListener('change', async () => {
     if (input.checked) await saveSettings({ showLimitUsed: input.value === 'used' });
   });
+}
+for (const [field, inputId] of HUB_DRAFT_FIELDS) {
+  els[inputId]?.addEventListener('input', () => markHubDraftDirty(field));
 }
 els.syncUploadIntervalInput?.addEventListener('change', async () => {
   await saveSettings({ syncUploadIntervalMs: Number(els.syncUploadIntervalInput.value) });
@@ -10228,6 +12272,14 @@ els.blurInput.addEventListener('input', applyAppearanceFromControls);
 els.zoomInput.addEventListener('input', applyAppearanceFromControls);
 els.resetThemeColorsButton?.addEventListener('click', () => commitThemeColors({}));
 els.resetVendorColorsButton?.addEventListener('click', () => commitVendorColors({}));
+els.interfaceFontPreset?.addEventListener('change', () => handleFontPresetChange('interface'));
+els.displayFontPreset?.addEventListener('change', () => handleFontPresetChange('display'));
+els.interfaceFontInput?.addEventListener('input', previewFontSettings);
+els.displayFontInput?.addEventListener('input', previewFontSettings);
+els.interfaceFontInput?.addEventListener('change', saveFontSettingsFromControls);
+els.displayFontInput?.addEventListener('change', saveFontSettingsFromControls);
+els.resetInterfaceFontButton?.addEventListener('click', () => resetInterfaceFont());
+els.resetDisplayFontButton?.addEventListener('click', () => resetDisplayFont());
 els.applyThemeCodeButton?.addEventListener('click', () => { void pasteAndApplyThemeCode(); });
 els.copyThemeCodeButton?.addEventListener('click', () => { void copyCurrentThemeCode(); });
 els.themeCodeInput?.addEventListener('keydown', (event) => {
@@ -10282,13 +12334,17 @@ els.showCompactTotalTokensInput.addEventListener('change', async () => {
 els.compactTokenUnitsInput?.addEventListener('change', async () => {
   await saveAppearanceFromControls();
 });
-window.addEventListener('resize', () => { if (!numberAnimHandle) fitTotalNumber(); });
+window.addEventListener('resize', () => {
+  if (!numberAnimHandle) fitTotalNumber();
+  refreshFloatingBubbleBitmapForDeviceScale();
+});
 els.swapSettingsRefreshInput.addEventListener('change', () => {
   applyControlLayout(els.swapSettingsRefreshInput.checked);
   void saveAppearanceFromControls();
 });
 els.discordRpcInput.addEventListener('change', saveAppearanceFromControls);
 els.windowBehaviorInput.addEventListener('change', () => saveSettings({ windowBehavior: els.windowBehaviorInput.value }));
+els.keepAboveTaskbarInput?.addEventListener('change', () => saveSettings({ keepAboveTaskbar: els.keepAboveTaskbarInput.checked }));
 els.floatingBubbleInput.addEventListener('change', () => {
   state.settings.floatingBubbleEnabled = els.floatingBubbleInput.checked;
   els.floatingBubbleOptions?.classList.toggle('hidden', !els.floatingBubbleInput.checked);
@@ -10315,12 +12371,24 @@ els.showTrayIconInput?.addEventListener('change', () => {
   els.showTrayProviderBadgeInput.disabled = !showTrayIcon;
   els.trayIconOptions?.classList.toggle('hidden', !showTrayIcon);
   els.trayOptions?.classList.toggle('hidden', !showTrayIcon || !els.trayModeInput.checked);
+  if (!showTrayIcon) state.settings.hideAppIcon = false;
+  syncHideAppIconControl(showTrayIcon, els.trayModeInput.checked);
   refreshTrayComposers();
-  saveSettings({ showTrayIcon, trayMode: showTrayIcon ? els.trayModeInput.checked : false });
+  saveSettings({
+    showTrayIcon,
+    trayMode: showTrayIcon ? els.trayModeInput.checked : false,
+    hideAppIcon: showTrayIcon ? Boolean(state.settings.hideAppIcon) : false
+  });
 });
 els.trayModeInput.addEventListener('change', () => {
   els.trayOptions?.classList.toggle('hidden', !els.showTrayIconInput?.checked || !els.trayModeInput.checked);
+  syncHideAppIconControl(els.showTrayIconInput?.checked !== false, els.trayModeInput.checked);
   saveSettings({ trayMode: els.trayModeInput.checked });
+});
+els.hideAppIconInput?.addEventListener('change', () => {
+  state.settings.hideAppIcon = els.hideAppIconInput.checked;
+  els.hideAppIconOptions?.classList.toggle('hidden', !els.hideAppIconInput.checked);
+  saveSettings({ hideAppIcon: els.hideAppIconInput.checked });
 });
 els.trayContentInput.addEventListener('change', () => {
   state.settings.trayContent = els.trayContentInput.value;
@@ -10386,7 +12454,7 @@ els.floatingBubbleTab.addEventListener('keydown', (event) => {
 });
 
 async function runAppUpdateAction() {
-  const mode = appUpdateActionMode(state.appUpdate);
+  const mode = appUpdatePresentationApi.appUpdateActionMode(state.appUpdate);
   if (mode === 'install') {
     state.appUpdate = await window.tokenMonitor.installAppUpdate();
   } else if (mode === 'download') {
@@ -10404,7 +12472,7 @@ async function runAppUpdateAction() {
 
 els.appUpdatePillAction.addEventListener('click', async () => {
   if (!renderAppUpdatePopover(state.appUpdate) || typeof els.appUpdatePopover.showPopover !== 'function') {
-    if (appUpdateActionMode(state.appUpdate) === 'install') {
+    if (appUpdatePresentationApi.appUpdateActionMode(state.appUpdate) === 'install') {
       const url = state.appUpdate?.latest?.htmlUrl;
       if (url) await window.tokenMonitor.openExternal(url);
       return;
@@ -10477,24 +12545,12 @@ els.appUpdateReleaseNotesButton.addEventListener('click', async () => {
 
 window.tokenMonitor.onSettingsPush?.((next) => {
   if (!next) return;
-  const prevMetric = state.settings?.heatmapMetric;
-  const prevLanguage = state.settings?.language;
-  const prevCompactTokenUnits = state.settings?.compactTokenUnits;
-  const prevShowCompactTotalTokens = state.settings?.showCompactTotalTokens;
+  state.settingsPushRevision += 1;
   state.settings = next;
   applyEffectiveCurrencyRates();
   preserveSettingsPanelScroll(syncSettingsForm);
+  if (!isSettingsSurfaceVisible()) statsRenderScheduler.request();
   maybeUpdateBarsIcon();
-  if ((prevMetric || 'cost') !== (next.heatmapMetric || 'cost')) {
-    render();
-  } else if (
-    prevLanguage !== next.language
-    || prevCompactTokenUnits !== next.compactTokenUnits
-  ) {
-    render();
-  } else if (prevShowCompactTotalTokens !== next.showCompactTotalTokens) {
-    updateTotalCompact(state.currentTotal);
-  }
 });
 
 reducedMotionMedia?.addEventListener?.('change', () => {
@@ -10512,26 +12568,46 @@ window.tokenMonitor.onFloatingBubbleState?.((payload) => {
 window.tokenMonitor.onHubPush?.((payload) => {
   if (!payload?.info) return;
   state.hubInfo = payload.info;
+  const settingsVisible = isSettingsSurfaceVisible();
   // The first switch to Host mode generates the shared secret asynchronously
   // after settings:update has already returned, so mirror the freshly minted
   // value back into state + input — otherwise the Shared Secret field stays
   // blank and other devices can't pair until the user clicks Regenerate.
   if (payload.info.secret && payload.info.secret !== state.settings?.hubHostSecret) {
     state.settings = { ...state.settings, hubHostSecret: payload.info.secret };
-    if (els.hubSecretInput && state.settings.hubMode === 'host') {
+    if (settingsVisible && els.hubSecretInput && state.settings.hubMode === 'host') {
       els.hubSecretInput.value = payload.info.secret;
     }
   }
-  renderHubStatus();
+  if (settingsVisible) renderHubStatus();
 });
 
 window.tokenMonitor.onTokscalePush?.((payload) => {
   mergeTokscalePayload(payload);
-  renderTokscaleStatus();
+  if (isSettingsSurfaceVisible()) renderTokscaleStatus();
 });
 
+function renderConnectionStatus(surface = visibleStatsSurface()) {
+  if (surface !== 'main' && surface !== 'settings') return;
+  setLiveDot(state.streamConnected);
+  setStatus(statusTextFor(state.mode, state.streamConnected));
+  if (surface === 'settings') renderSyncClientStatus();
+}
+
 function renderStatsUpdate() {
-  render();
+  const surface = visibleStatsSurface();
+  renderConnectionStatus(surface);
+  if (surface === 'main') {
+    render();
+    return;
+  }
+  if (surface === 'bubble') {
+    renderFloatingBubbleContent();
+    signalContentReady();
+    return;
+  }
+  if (surface !== 'settings') return;
+  renderCodexAccounts();
   renderSettingsSummaries();
   renderLimitProviderCheckboxes();
   renderToolPreferences();
@@ -10545,22 +12621,49 @@ function renderStatsUpdate() {
   renderExternalProviderStatus('zaiteam');
   renderExternalProviderStatus('volcengine');
   renderExternalProviderStatus('qoder');
+  renderExternalProviderStatus('trae');
+  renderExternalProviderStatus('zed');
+  renderExternalProviderStatus('commandcode');
   renderExternalProviderStatus('kimi');
   renderExternalProviderStatus('ollama');
   renderCopilotStatus();
+  signalContentReady();
 }
 
 const statsRenderScheduler = statsRenderSchedulerApi.createStatsRenderScheduler({
-  isHidden: () => document.hidden,
+  isHidden: isRendererWindowHidden,
   render: renderStatsUpdate
 });
-document.addEventListener('visibilitychange', () => {
-  if (document.hidden) cancelTokenRateBoost();
-  statsRenderScheduler.flush();
+function handleWindowVisibilityChange() {
+  if (!statsRenderScheduler.visibilityChanged()) return;
+  if (isRendererWindowHidden()) cancelTokenRateBoost();
+  else applyFloatingBubbleState(state.floatingBubble, { renderContent: false });
+  if (!isRendererWindowHidden() && state.settings?.hubMode === 'client' && hubBuildStatusRefreshDue()) {
+    void refreshHubBuildStatus();
+  }
+  if (isSettingsSurfaceVisible()) {
+    statsRenderScheduler.clear();
+    syncSettingsForm();
+    renderConnectionStatus('settings');
+    // syncSettingsForm() covers what the dropped catch-up render would have
+    // drawn, but it is not a stats render and never reaches signalContentReady().
+    // A window revealed straight into Settings must still report it has painted.
+    signalContentReady();
+  } else {
+    if (settingsDomSyncPending) syncSettingsForm();
+    statsRenderScheduler.flush();
+  }
+  ensureServiceStatusTicker();
+}
+document.addEventListener('visibilitychange', handleWindowVisibilityChange);
+window.tokenMonitor.onWindowVisibilityPush?.((visible) => {
+  state.windowVisible = visible;
+  handleWindowVisibilityChange();
 });
 
 window.tokenMonitor.onStatsPush?.((payload) => {
   if (!payload) return;
+  const wasStreamConnected = state.streamConnected;
   if (payload.event === 'status') {
     state.streamConnected = Boolean(payload.data?.connected);
     if (payload.data?.mode) state.mode = payload.data.mode;
@@ -10569,7 +12672,7 @@ window.tokenMonitor.onStatsPush?.((payload) => {
     // Local collector overlays update client-mode data independently of the
     // Hub SSE transport. Preserve its current Offline/error state until a
     // real stream status or remote stats event proves the connection changed.
-    if (payload.data?.reason !== 'local') {
+    if (payload.data?.reason !== 'local' && payload.data?.reason !== 'presentation') {
       state.streamConnected = true;
       state.streamFailure = null;
     }
@@ -10583,11 +12686,27 @@ window.tokenMonitor.onStatsPush?.((payload) => {
   } else {
     return;
   }
-  setLiveDot(state.streamConnected);
-  setStatus(statusTextFor(state.mode, state.streamConnected));
-  renderSyncClientStatus();
+  if (payload.event === 'status') {
+    if (isRendererWindowHidden()) statsRenderScheduler.request();
+    else renderConnectionStatus();
+  }
+  if (!wasStreamConnected && state.streamConnected && state.settings?.hubMode === 'client') {
+    void refreshHubBuildStatus();
+  }
   if (payload.data?.stats) {
-    statsRenderScheduler.request();
+    if (fixedPeriodRangesApi.isDerived(state.period)) {
+      // Keep the currently rendered range stable while a new History revision is
+      // fetched; repaint once with the coherent snapshot instead of flashing an
+      // intermediate loading layout.
+      if (fixedPeriodHistoryNeedsWarmup()) {
+        void warmFixedPeriodHistory({ renderOnComplete: true });
+      } else {
+        statsRenderScheduler.request();
+      }
+    } else {
+      statsRenderScheduler.request();
+      void warmFixedPeriodHistory({ renderOnComplete: false });
+    }
     maybeUpdateBarsIcon();
   }
   restartTimer();
@@ -10635,8 +12754,15 @@ function providerImageOpticalSample(image) {
   ctx.drawImage(image, 0, 0, sampleSize, sampleSize);
 
   let bounds = { x: 0, y: 0, width: sampleSize, height: sampleSize };
+  // Whether the mark is drawn in one flat ink, i.e. authored `fill="currentColor"`
+  // and meant to be re-inked, as opposed to brand artwork that must be left alone.
+  // The rule itself lives in isFlatInkPixels so it can be tested against pixels
+  // directly; pixels we cannot read back (a future non-local image) leave it
+  // false, which means untinted.
+  let flatInk = false;
   try {
     const pixels = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
+    flatInk = window.TokenMonitorTrayProviderIcons.isFlatInkPixels(pixels);
     let minX = sampleSize;
     let minY = sampleSize;
     let maxX = -1;
@@ -10662,18 +12788,18 @@ function providerImageOpticalSample(image) {
     // Keep the original frame if a future non-local image cannot be inspected.
   }
 
-  const sample = { canvas, bounds };
+  const sample = { canvas, bounds, flatInk };
   trayProviderImageOpticalSamples.set(image, sample);
   return sample;
 }
 
-function paintProviderImage(ctx, image, x, y, size, templateColor = '') {
+function paintProviderImage(ctx, image, x, y, size, templateColor = '', optical = {}) {
   const {
     trayProviderOpticalLayout,
     trayProviderOpticalRatio
   } = window.TokenMonitorTrayProviderIcons;
   const sample = providerImageOpticalSample(image);
-  const opticalRatio = trayProviderOpticalRatio(trayProviderImageIds.get(image));
+  const opticalRatio = trayProviderOpticalRatio(trayProviderImageIds.get(image), optical);
   const layout = trayProviderOpticalLayout(sample.bounds, size, opticalRatio);
   const maskSize = Math.max(1, Math.round(size));
   const mask = document.createElement('canvas');
@@ -10699,16 +12825,31 @@ function paintProviderImage(ctx, image, x, y, size, templateColor = '') {
   ctx.drawImage(mask, x, y, size, size);
 }
 
-function drawProviderImage(ctx, image, x, y, size, contrastHalo = false, templateColor = '') {
+// Which ink a provider mark is drawn in. An explicit colour always wins — the
+// menubar previews and the floating bubble pass their own, and the bubble
+// deliberately passes none to keep the artwork in colour. `trayInk` is set only
+// by the two paths that hand a bitmap to the system tray, where a monochrome
+// mark has to be re-inked for a dark taskbar (see trayProviderGlyphInk).
+function trayGlyphInk(options, image) {
+  if (options?.templateIconColor) return options.templateIconColor;
+  if (options?.trayInk !== true || !image) return '';
+  return window.TokenMonitorTrayText.trayProviderGlyphInk(
+    state.appInfo?.platform,
+    state.systemDarkUi,
+    providerImageOpticalSample(image).flatInk
+  );
+}
+
+function drawProviderImage(ctx, image, x, y, size, contrastHalo = false, templateColor = '', optical = {}) {
   if (contrastHalo) {
     const lightSurface = themePresetsApi.isLightHex(resolvedThemeColor('bg'));
     ctx.save();
     ctx.shadowColor = lightSurface ? 'rgba(0, 0, 0, 0.58)' : 'rgba(255, 255, 255, 0.82)';
     ctx.shadowBlur = Math.max(2, Math.round(size * 0.1));
-    paintProviderImage(ctx, image, x, y, size, templateColor);
+    paintProviderImage(ctx, image, x, y, size, templateColor, optical);
     ctx.restore();
   }
-  paintProviderImage(ctx, image, x, y, size, templateColor);
+  paintProviderImage(ctx, image, x, y, size, templateColor, optical);
 }
 
 function renderBarsIcon(stats, height = 44, picker = pickWorstProvider, colors = {}, options = {}) {
@@ -10735,7 +12876,7 @@ function renderBarsIcon(stats, height = 44, picker = pickWorstProvider, colors =
       layout.iconY,
       layout.iconSize,
       options.providerContrastHalo === true,
-      options.templateIconColor || ''
+      trayGlyphInk(options, providerImage)
     );
   }
 
@@ -10871,7 +13012,7 @@ function renderLimitSessionsIcon(stats, height = 44, configOrder, colors = {}, o
     if (entry.image) {
       drawProviderImage(ctx, entry.image, x, layout.iconY, iconSize,
         options.providerContrastHalo === true,
-        options.templateIconColor || ''
+        trayGlyphInk(options, entry.image)
       );
       x += iconSize + gap;
     }
@@ -11059,7 +13200,7 @@ function drawCustomTrayProviderImage(ctx, img, provider, x, y, size, options = {
     y + inset,
     imageSize,
     options.providerContrastHalo === true,
-    options.templateIconColor || ''
+    trayGlyphInk(options, img)
   );
   if (showBadge) {
     drawCustomTrayProviderBadge(
@@ -11153,8 +13294,9 @@ function renderCustomTrayItemCanvas(item, height = 44, colors = {}, options = {}
     };
     if (showIcon) {
       const preferredIndex = item.icon === 'second' ? 1 : 0;
-      const iconRow = rows[preferredIndex]?.selection ? rows[preferredIndex] : rows.find((row) => row.selection);
-      const provider = item.icon === 'app' ? 'app' : iconRow?.selection?.provider || '';
+      const provider = item.icon === 'app'
+        ? 'app'
+        : trayLayoutApi.preferredRowProvider(rows, preferredIndex);
       const providerImage = trayProviderImages[provider];
       if (providerImage) {
         drawCustomTrayProviderImage(
@@ -11183,8 +13325,9 @@ function renderCustomTrayItemCanvas(item, height = 44, colors = {}, options = {}
     const rows = item.rows.slice(0, 2);
     const showIcon = item.icon !== 'none';
     const preferredIndex = item.icon === 'second' ? 1 : 0;
-    const iconRow = rows[preferredIndex]?.selection ? rows[preferredIndex] : rows.find((row) => row.selection);
-    const provider = item.icon === 'app' ? 'app' : iconRow?.selection?.provider || '';
+    const provider = item.icon === 'app'
+      ? 'app'
+      : trayLayoutApi.preferredRowProvider(rows, preferredIndex);
     const iconSize = h;
     const iconGap = Math.max(2, Math.round(h * 0.08));
     const fontSize = Math.max(8, Math.round(h * 0.43));
@@ -11320,11 +13463,16 @@ function trayDataUrlForMode(mode, size = 44, colors, options = {}) {
 }
 
 async function maybeUpdateBarsIcon(options = {}) {
-  if (options.refreshComposers !== false) refreshTrayComposers();
+  if (options.refreshComposers !== false && isSettingsSurfaceVisible()) refreshTrayComposers();
+  else syncCustomTrayClockTimer();
   const mode = state.settings?.trayContent;
   if (!window.TokenMonitorTrayText.isGeneratedTrayIconMode(mode)) return;
   if (!window.tokenMonitor.setTrayIcons) return;
-  const dataUrl = trayDataUrlForMode(mode, 44);
+  // Ink follows the surface the shell will draw this on, not the app's own theme
+  // (see trayGeneratedIconColors) — on a dark taskbar the historical black made
+  // the icon invisible.
+  const colors = window.TokenMonitorTrayText.trayGeneratedIconColors(state.appInfo?.platform, state.systemDarkUi);
+  const dataUrl = trayDataUrlForMode(mode, 44, colors, { trayInk: true });
   try { await window.tokenMonitor.setTrayIcons({ [mode]: dataUrl || null }); } catch (_) {}
 }
 
@@ -11400,11 +13548,15 @@ function trayComposerWindowChoices(source) {
   const choices = trayLayoutApi.sourceWindowOptions(
     state.stats || {},
     source
-  ).map((entry) => ({
-    value: entry.value,
-    label: trayComposerWindowLabel(entry),
-    preview: trayComposerSourcePreview({ ...source, window: entry.value })
-  }));
+  ).map((entry) => {
+    const selectedWindow = entry.selection?.window || entry.window;
+    return {
+      value: entry.value,
+      label: trayComposerWindowLabel(entry),
+      preview: trayComposerSourcePreview({ ...source, window: entry.value }),
+      credits: selectedWindow?.metric === 'credits'
+    };
+  });
   if (choices.length) return choices;
   return [{
     value: 'primary',
@@ -11420,7 +13572,7 @@ function trayComposerWindowLabel(entry) {
   const kindLabel = translatedKind === kindKey ? t('trayComposer.window.primary') : translatedKind;
   const rawLabel = String(entry.label || '').trim();
   const normalizedLabel = rawLabel.toLowerCase();
-  const redundantLabels = new Set([kind, 'session', 'weekly', 'billing', 'total']);
+  const redundantLabels = new Set([kind, 'session', 'daily', 'weekly', 'billing', 'total']);
   if (!rawLabel || redundantLabels.has(normalizedLabel)) return kindLabel;
   return `${kindLabel} · ${rawLabel}`;
 }
@@ -11527,7 +13679,7 @@ function trayComposerPreview(surface) {
     // icons in colour, so no templateIconColor here — that is a menu-bar-only
     // requirement and would preview the bubble as monochrome.
     return {
-      src: trayDataUrlForMode(mode, 44, floatingBubbleGeneratedColors(), {
+      src: trayDataUrlForMode(mode, currentFloatingBubbleBitmapHeight(), floatingBubbleGeneratedColors(), {
         stats,
         layout: state.settings?.[layoutKey],
         contentOnly: mode === 'barsAllSessions' || mode === 'limitsAllSessions',
@@ -11601,6 +13753,26 @@ function createTrayComposer(surface) {
   });
 }
 
+function syncCustomTrayClockTimer() {
+  const clockNeeded = (
+    state.settings?.trayContent === 'custom'
+      && trayLayoutApi.trayLayoutNeedsClock(state.settings?.trayCustomLayout)
+  ) || (
+    state.settings?.floatingBubbleContent === 'custom'
+      && trayLayoutApi.trayLayoutNeedsClock(state.settings?.floatingBubbleCustomLayout)
+  );
+  if (clockNeeded && !customTrayClockTimer) {
+    customTrayClockTimer = setInterval(() => {
+      void maybeUpdateBarsIcon({ refreshComposers: false });
+      if (isRendererWindowHidden()) statsRenderScheduler.request();
+      else renderFloatingBubbleContent();
+    }, 30 * 1000);
+  } else if (!clockNeeded && customTrayClockTimer) {
+    clearInterval(customTrayClockTimer);
+    customTrayClockTimer = null;
+  }
+}
+
 function refreshTrayComposers() {
   const surfaces = [
     { id: 'tray', root: els.trayComposer, visible: state.settings?.showTrayIcon !== false },
@@ -11612,22 +13784,7 @@ function refreshTrayComposers() {
     createTrayComposer
   );
   Object.values(trayComposers).forEach((composer) => composer?.refresh());
-  const clockNeeded = (
-    state.settings?.trayContent === 'custom'
-      && trayLayoutApi.trayLayoutNeedsClock(state.settings?.trayCustomLayout)
-  ) || (
-    state.settings?.floatingBubbleContent === 'custom'
-      && trayLayoutApi.trayLayoutNeedsClock(state.settings?.floatingBubbleCustomLayout)
-  );
-  if (clockNeeded && !customTrayClockTimer) {
-    customTrayClockTimer = setInterval(() => {
-      void maybeUpdateBarsIcon({ refreshComposers: false });
-      renderFloatingBubbleContent();
-    }, 30 * 1000);
-  } else if (!clockNeeded && customTrayClockTimer) {
-    clearInterval(customTrayClockTimer);
-    customTrayClockTimer = null;
-  }
+  syncCustomTrayClockTimer();
 }
 
 function loadImage(src) {
@@ -11648,11 +13805,15 @@ function providerImageToPngDataUrl(img, size, showBadge = false, options = {}) {
   const ctx = canvas.getContext('2d');
   const imageInset = showBadge ? Math.max(1, Math.round(layout.iconSize * 0.07)) : 0;
   const imageSize = layout.iconSize - imageInset * 2;
+  // Only the tray delivery marks itself standalone: there the mark is the whole
+  // icon and Windows expects it to fill its cell. The composer's provider picker
+  // renders previews through here too and keeps the composed optical inset.
+  const optical = { standalone: options.standalone === true, platform: state.appInfo?.platform };
   if (showBadge) {
     ctx.save();
     ctx.shadowColor = 'rgba(255, 255, 255, 0.95)';
     ctx.shadowBlur = Math.max(2, Math.round(layout.iconSize * 0.1));
-    paintProviderImage(ctx, img, imageInset, imageInset, imageSize);
+    paintProviderImage(ctx, img, imageInset, imageInset, imageSize, '', optical);
     ctx.restore();
   }
   drawProviderImage(
@@ -11662,7 +13823,8 @@ function providerImageToPngDataUrl(img, size, showBadge = false, options = {}) {
     imageInset,
     imageSize,
     false,
-    showBadge ? '' : options.templateColor || ''
+    trayGlyphInk({ templateIconColor: options.templateColor, trayInk: options.trayInk }, img),
+    optical
   );
 
   if (!showBadge) return canvas.toDataURL('image/png');
@@ -11706,7 +13868,7 @@ async function deliverTrayProviderIcons(showBadge = state.settings?.showTrayProv
       const img = await loadImage(path);
       trayProviderImages[id] = img;
       trayProviderImageIds.set(img, id);
-      icons[id] = providerImageToPngDataUrl(img, 44, showBadge);
+      icons[id] = providerImageToPngDataUrl(img, 44, showBadge, { trayInk: true, standalone: true });
     } catch (_) { /* skip missing */ }
   }
   if (!trayProviderIconDeliveryGuard.isCurrent(deliveryId)) return;
@@ -11746,6 +13908,10 @@ function setCursorAccountExpanded(expanded) {
   setAccountGroupExpanded('cursor', expanded, 'cursorAccountExpanded');
 }
 
+function setAntigravityAccountExpanded(expanded) {
+  setAccountGroupExpanded('antigravity', expanded, 'antigravityAccountExpanded');
+}
+
 function setOpencodeCookieExpanded(expanded) {
   setAccountGroupExpanded('opencode', expanded, 'opencodeCookieExpanded');
 }
@@ -11762,6 +13928,7 @@ function selectedThirdPartyAdapter() {
   const platform = String(document.getElementById('thirdpartyPlatformInput')?.value || 'newapi');
   const mode = String(document.getElementById('thirdpartyModeInput')?.value || 'account');
   if (platform === 'custom') return 'custom';
+  if (platform === 'sub2api') return 'sub2api';
   return mode === 'token' ? 'newapi-token' : 'newapi-account';
 }
 
@@ -11782,15 +13949,20 @@ function updateThirdPartyHttpWarning() {
 function setThirdPartyAdapterFields() {
   const adapter = selectedThirdPartyAdapter();
   const customMode = adapter === 'custom';
-  const accountMode = adapter === 'newapi-account';
+  const sub2apiMode = adapter === 'sub2api';
+  const singleChoiceField = customMode || sub2apiMode;
+  const accountMode = adapter === 'newapi-account' || sub2apiMode;
   const newApiAccountMode = adapter === 'newapi-account';
-  document.getElementById('thirdpartyChoiceGrid')?.classList.toggle('single-field', customMode);
-  document.getElementById('thirdpartyModeField')?.classList.toggle('hidden', customMode);
+  const pairedCredentials = newApiAccountMode;
+  document.getElementById('thirdpartyChoiceGrid')?.classList.toggle('single-field', singleChoiceField);
+  document.getElementById('thirdpartyModeField')?.classList.toggle('hidden', singleChoiceField);
   document.getElementById('thirdpartyCredentialGrid')?.classList.toggle(
     'single-field',
-    !newApiAccountMode
+    !pairedCredentials
   );
   document.getElementById('thirdpartyAccessTokenRow')?.classList.toggle('hidden', !accountMode);
+  document.getElementById('thirdpartyRefreshTokenRow')?.classList.toggle('hidden', !sub2apiMode);
+  document.getElementById('thirdpartySub2ApiSteps')?.classList.toggle('hidden', !sub2apiMode);
   document.getElementById('thirdpartyUserIdRow')?.classList.toggle('hidden', !newApiAccountMode);
   document.getElementById('thirdpartyApiKeyRow')?.classList.toggle('hidden', accountMode);
   document.getElementById('thirdpartyCustomConfig')?.classList.toggle('hidden', !customMode);
@@ -11798,10 +13970,40 @@ function setThirdPartyAdapterFields() {
   if (hint) {
     const hintKey = customMode
       ? 'settings.thirdparty.hintCustom'
-      : adapter === 'newapi-token'
-      ? 'settings.thirdparty.hintNewApiToken'
-      : 'settings.thirdparty.hintNewApiAccount';
+      : sub2apiMode
+        ? 'settings.thirdparty.hintSub2Api'
+        : adapter === 'newapi-token'
+          ? 'settings.thirdparty.hintNewApiToken'
+          : 'settings.thirdparty.hintNewApiAccount';
     hint.textContent = t(hintKey);
+  }
+  const accessTokenLabel = document.getElementById('thirdpartyAccessTokenLabel');
+  const accessTokenInput = document.getElementById('thirdpartyAccessTokenInput');
+  const refreshTokenLabel = document.getElementById('thirdpartyRefreshTokenLabel');
+  const refreshTokenInput = document.getElementById('thirdpartyRefreshTokenInput');
+  const accessTokenKey = 'settings.thirdparty.accessToken';
+  const accessTokenPlaceholderKey = sub2apiMode
+    ? 'settings.thirdparty.sub2ApiAccessTokenPlaceholder'
+    : 'settings.thirdparty.accessTokenPlaceholder';
+  const refreshTokenKey = 'settings.thirdparty.refreshToken';
+  const refreshTokenPlaceholderKey = sub2apiMode
+    ? 'settings.thirdparty.sub2ApiRefreshTokenPlaceholder'
+    : 'settings.thirdparty.refreshTokenPlaceholder';
+  if (accessTokenLabel) {
+    accessTokenLabel.dataset.i18n = accessTokenKey;
+    accessTokenLabel.textContent = t(accessTokenKey);
+  }
+  if (accessTokenInput) {
+    accessTokenInput.dataset.i18nPlaceholder = accessTokenPlaceholderKey;
+    accessTokenInput.placeholder = t(accessTokenPlaceholderKey);
+  }
+  if (refreshTokenLabel) {
+    refreshTokenLabel.dataset.i18n = refreshTokenKey;
+    refreshTokenLabel.textContent = t(refreshTokenKey);
+  }
+  if (refreshTokenInput) {
+    refreshTokenInput.dataset.i18nPlaceholder = refreshTokenPlaceholderKey;
+    refreshTokenInput.placeholder = t(refreshTokenPlaceholderKey);
   }
 }
 
@@ -11867,6 +14069,7 @@ function renderCodexLoginStatus() {
 }
 
 function renderCodexAccounts() {
+  if (!isSettingsSurfaceVisible()) return;
   const statusEl = document.getElementById('codexAccountStatus');
   const listEl = document.getElementById('codexAccountList');
   const errorEl = document.getElementById('codexAccountErrorMessage');
@@ -11887,6 +14090,7 @@ function renderCodexAccounts() {
     empty.textContent = t('settings.codex.empty');
     listEl.append(empty);
   } else {
+    const codexProviders = localProviderStatuses('codex');
     for (const account of accounts) {
       const enabled = account.enabled !== false;
       const row = document.createElement('div');
@@ -11926,7 +14130,11 @@ function renderCodexAccounts() {
         : account.workspaceLabel;
       const accountMetadata = [
         workspaceLabel,
-        enabled ? limitProviderPresentationApi.limitProviderDisplayLabel(account.accountLabel) : t('settings.codex.disabled')
+        enabled
+          ? limitProviderPresentationApi.limitProviderDisplayLabel(
+            accountIdentityApi.codexManagedAccountPlanLabel(account, codexProviders)
+          )
+          : t('settings.codex.disabled')
       ].filter((value, index, values) => value && values.indexOf(value) === index);
       info.textContent = accountMetadata.join(' · ');
       info.title = accountMetadata.join(' · ');
@@ -12043,7 +14251,130 @@ function clearDeepseekProviderStatus() {
   state.stats.limits.providers = state.stats.limits.providers.filter((provider) => provider.provider !== 'deepseek');
 }
 
+function renderAntigravityStatus() {
+  if (!isSettingsSurfaceVisible()) return;
+  const statusEl = document.getElementById('antigravityAccountStatus');
+  const listEl = document.getElementById('antigravityAccountList');
+  const errorEl = document.getElementById('antigravityAccountErrorMessage');
+  const statusMessage = document.getElementById('antigravityLoginStatus');
+  const addButton = document.getElementById('antigravityAddAccountButton');
+  const cancelButton = document.getElementById('antigravityCancelLoginButton');
+  if (!statusEl || !listEl || !errorEl || !addButton || !cancelButton) return;
+  const accounts = state.settings?.antigravityManagedAccounts || [];
+  const enabledCount = accounts.filter((account) => account.enabled !== false).length;
+  setCursorStatusText(statusEl, accounts.length === 0
+    ? t('settings.antigravity.notConfigured')
+    : t('settings.antigravity.connected', { linked: enabledCount, total: accounts.length }));
+  errorEl.textContent = state.antigravityAccountError || '';
+  errorEl.classList.toggle('hidden', !state.antigravityAccountError);
+  addButton.disabled = state.antigravitySignInBusy;
+  addButton.textContent = t(state.antigravitySignInBusy
+    ? 'settings.antigravity.waitingForGoogle'
+    : 'settings.antigravity.addAccount');
+  cancelButton.classList.toggle('hidden', !state.antigravitySignInBusy);
+  if (statusMessage) {
+    statusMessage.textContent = state.antigravitySignInBusy ? t('settings.antigravity.loginStatus') : '';
+    statusMessage.classList.toggle('hidden', !state.antigravitySignInBusy);
+  }
+
+  listEl.replaceChildren();
+  if (accounts.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'settings-note';
+    empty.textContent = t('settings.antigravity.empty');
+    listEl.append(empty);
+  }
+  const antigravityProviders = localProviderStatuses('antigravity');
+  accounts.forEach((account, index) => {
+    const enabled = account.enabled !== false;
+    const accountName = String(account.accountEmail || account.accountLabel || '').trim()
+      || t('settings.antigravity.accountFallback', { number: index + 1 });
+    const row = document.createElement('div');
+    row.className = 'managed-account-row';
+    row.classList.toggle('disabled', !enabled);
+
+    const input = document.createElement('input');
+    input.className = 'managed-account-checkbox';
+    input.type = 'checkbox';
+    input.checked = enabled;
+    input.disabled = state.antigravitySignInBusy;
+    input.setAttribute('aria-label', t('settings.antigravity.toggleAccount', { account: accountName }));
+    input.addEventListener('change', async () => {
+      input.disabled = true;
+      const result = await window.tokenMonitor.antigravity.setAccountEnabled(account.id, input.checked);
+      if (!result?.ok) state.antigravityAccountError = result?.error || t('settings.antigravity.toggleFailed');
+      else {
+        state.antigravityAccountError = '';
+        state.settings.antigravityManagedAccounts = result.accounts || [];
+      }
+      renderAntigravityStatus();
+      renderSettingsSummaries();
+    });
+
+    const main = document.createElement('div');
+    main.className = 'managed-account-main';
+    const email = document.createElement('div');
+    email.className = 'managed-account-email';
+    email.textContent = accountName;
+    main.append(email);
+
+    const right = document.createElement('span');
+    right.className = 'managed-account-right';
+    const info = document.createElement('span');
+    info.className = 'managed-account-info';
+    const accountKey = String(account.accountKey || '').trim();
+    const accountEmail = String(account.accountEmail || '').trim().toLowerCase();
+    const provider = antigravityProviders.find((candidate) => {
+      const providerKey = String(candidate?.accountKey || '').trim();
+      const providerEmail = String(candidate?.accountEmail || '').trim().toLowerCase();
+      if (accountKey && providerKey) return accountKey === providerKey;
+      return Boolean(accountEmail && providerEmail && accountEmail === providerEmail);
+    });
+    const planLabel = limitProviderPresentationApi.limitProviderDisplayLabel(provider?.accountLabel);
+    const statusLabel = provider && provider.status !== 'ok'
+      ? translatedLimitProviderTag(limitProviderPresentationApi.limitProviderStatusLabel(provider))
+      : '';
+    info.textContent = enabled ? (planLabel || statusLabel) : t('settings.antigravity.disabled');
+    info.title = provider?.actionRequired === 'accountVerification'
+      ? t('settings.antigravity.verificationRequiredDetail')
+      : info.textContent;
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'managed-account-remove';
+    remove.textContent = '✕';
+    remove.title = t('settings.antigravity.remove');
+    remove.setAttribute('aria-label', t('settings.antigravity.remove'));
+    remove.disabled = state.antigravitySignInBusy;
+    let confirmingRemove = false;
+    remove.addEventListener('click', async () => {
+      if (!confirmingRemove) {
+        confirmingRemove = true;
+        remove.classList.add('confirming');
+        remove.textContent = '✓';
+        remove.title = t('settings.antigravity.removeConfirm', { account: accountName });
+        remove.setAttribute('aria-label', remove.title);
+        return;
+      }
+      remove.disabled = true;
+      const result = await window.tokenMonitor.antigravity.removeAccount(account.id);
+      if (!result?.ok) state.antigravityAccountError = result?.error || t('settings.antigravity.removeFailed');
+      else {
+        state.antigravityAccountError = '';
+        state.settings.antigravityManagedAccounts = result.accounts || [];
+        refreshStats({ force: true }).catch(() => {});
+      }
+      renderAntigravityStatus();
+      renderSettingsSummaries();
+    });
+    right.append(info, remove);
+    row.append(input, main, right);
+    listEl.append(row);
+  });
+  renderSettingsSummaries();
+}
+
 function renderMimoStatus() {
+  if (!isSettingsSurfaceVisible()) return;
   const statusEl = document.getElementById('mimoAccountStatus');
   const listEl = document.getElementById('mimoAccountList');
   const emptyEl = document.getElementById('mimoAccountEmpty');
@@ -12231,6 +14562,21 @@ const externalLimitAccountConfig = {
     sourceKey: 'qoderCookieSource',
     pendingKey: 'qoderPendingCheckSince'
   },
+  trae: {
+    configuredKey: 'traeAccessTokenConfigured',
+    sourceKey: 'traeAccessTokenSource',
+    pendingKey: 'traePendingCheckSince'
+  },
+  zed: {
+    configuredKey: 'zedCookieConfigured',
+    sourceKey: 'zedCookieSource',
+    pendingKey: 'zedPendingCheckSince'
+  },
+  commandcode: {
+    configuredKey: 'commandcodeCookieConfigured',
+    sourceKey: 'commandcodeCookieSource',
+    pendingKey: 'commandcodePendingCheckSince'
+  },
   kimi: {
     configuredKey: 'kimiCredentialConfigured',
     sourceKey: 'kimiCredentialSource',
@@ -12412,6 +14758,17 @@ function ollamaPlatformUrl() {
   return 'https://ollama.com/settings';
 }
 
+function commandcodePlatformUrl() {
+  // Account-scoped in the address bar (/<username>/settings/usage), but this
+  // path resolves to it and bounces through signin?returnTo= when signed out,
+  // so it is the one link that works without knowing the username.
+  return 'https://commandcode.ai/settings/usage';
+}
+
+function zedPlatformUrl() {
+  return 'https://dashboard.zed.dev/';
+}
+
 function ollamaValidationError(provider) {
   if (provider?.status === 'unauthorized') return t('settings.ollama.validationInvalid');
   if (provider?.status === 'rateLimited' || provider?.status === 'sourceRateLimited') {
@@ -12447,6 +14804,7 @@ function renderExternalProviderStatus(providerName) {
     const regionInput = document.getElementById('zaiApiRegionInput');
     if (regionInput) regionInput.value = state.settings?.zaiApiRegion === 'bigmodel-cn' ? 'bigmodel-cn' : 'global';
   }
+  if (providerName === 'volcengine') renderVolcengineAgentOverrideState();
   if (providerName === 'qoder') {
     const siteInput = document.getElementById('qoderSiteInput');
     if (siteInput) siteInput.value = state.settings?.qoderSite === 'cn' ? 'cn' : 'global';
@@ -12462,6 +14820,30 @@ function renderExternalProviderStatus(providerName) {
   logoutBtn.classList.toggle('hidden', source !== 'settings' || (!linked && !canClearConfiguredClaude));
   refreshBtn.classList.toggle('hidden', !configured);
   renderSettingsSummaries();
+}
+
+// The override inputs are password fields, cleared after every save and never
+// repopulated, so this tag is the only thing that tells a stored second account
+// apart from one that was never filled in. It reads the redacted 'set' marker
+// rather than volcengineAgentCredentials, which falls back to the Coding Plan
+// key and is therefore truthy for every Coding-only user.
+function renderVolcengineAgentOverrideState() {
+  const stored = state.settings?.volcengineAgentAccessKeyId === 'set';
+  document.getElementById('volcengineAgentConfigured')?.classList.toggle('hidden', !stored);
+  // Saving with the override fields empty deliberately keeps the stored one, so
+  // without this there is no way back to the main account short of clearing the
+  // Coding Plan credentials too.
+  document.getElementById('volcengineAgentClearButton')?.classList.toggle('hidden', !stored);
+}
+
+// The Agent Plan override is collapsed by default: it only matters when the two
+// plans were bought on different Volcengine accounts.
+function setVolcengineAgentExpanded(expanded) {
+  const next = Boolean(expanded);
+  state.volcengineAgentExpanded = next;
+  document.getElementById('volcengineAgentToggle')?.setAttribute('aria-expanded', next ? 'true' : 'false');
+  document.getElementById('volcengineAgentDetails')?.classList.toggle('hidden', !next);
+  document.getElementById('volcengineAgentPanel')?.classList.toggle('expanded', next);
 }
 
 function setMinimaxAccountExpanded(expanded) {
@@ -12557,16 +14939,18 @@ function renderDeepseekStatus() {
 }
 
 function renderOpenCodeProfiles() {
+  if (!isSettingsSurfaceVisible()) return;
   const listEl = document.getElementById('opencodeProfileList');
   if (!listEl) return;
 
   const api = window.tokenMonitor.opencode;
 
-  api.getProfiles().then(({ profiles, hasEnvVar }) => {
+  api.getProfiles().then(({ profiles, hasEnvVar, hasAmbientKey, ambientEnabled = true }) => {
+    if (!isSettingsSurfaceVisible()) return;
     listEl.innerHTML = '';
     const entries = Object.entries(profiles);
 
-    if (entries.length === 0 && !hasEnvVar) {
+    if (entries.length === 0 && !hasEnvVar && !hasAmbientKey) {
       listEl.innerHTML = '<div class="opencode-empty">' + t('settings.opencode.emptyList') + '</div>';
       state.opencodeProfileCount = 0;
       renderOpenCodeProfilesStatusSummary({});
@@ -12574,7 +14958,107 @@ function renderOpenCodeProfiles() {
       return;
     }
 
-    state.opencodeProfileCount = entries.length;
+    // The auto-detected key counts as an account: it is what the limits card is
+    // reading, so leaving it out of the total reports "not set up" next to live
+    // quota. It has no toggle or delete because Token Monitor does not own that
+    // credential — OpenCode does — but naming it does belong here: a name is
+    // what lets it join an account, and typing an existing account's name is
+    // how a user says the two are the same OpenCode account.
+    if (hasAmbientKey) {
+      const item = document.createElement('div');
+      item.className = 'opencode-profile-item';
+      // Switchable like any other account, even without a name. Turning it off
+      // is a device preference rather than a stored credential, so the row keeps
+      // rendering with its box clear instead of disappearing along with the only
+      // control that could bring it back.
+      const ambientToggle = document.createElement('input');
+      ambientToggle.className = 'profile-toggle';
+      ambientToggle.type = 'checkbox';
+      ambientToggle.checked = ambientEnabled;
+      ambientToggle.title = t('settings.opencode.ambientDetail');
+      ambientToggle.addEventListener('change', async () => {
+        await window.tokenMonitor.opencode.setAmbientEnabled(ambientToggle.checked);
+        renderOpenCodeProfiles();
+        updateOpenCodeProfilesStatus();
+        renderSettingsSummaries();
+      });
+      const nameBox = document.createElement('span');
+      nameBox.className = 'profile-name-box';
+      // An editable field rather than a label behind an edit button: this row
+      // has no name yet, and naming it is the only thing a user can do here, so
+      // hiding that behind a hover-revealed pencil hides the whole feature. The
+      // placeholder carries the label the row used to show.
+      const nameInput = document.createElement('input');
+      nameInput.className = 'profile-name-input is-placeholder';
+      nameInput.type = 'text';
+      nameInput.placeholder = t('settings.opencode.ambientName');
+      nameInput.title = t('settings.opencode.nameAmbient');
+
+      // Typing an existing account's name binds the auto-detected key into that
+      // account. That claim is confirmed, never inferred: the main process
+      // refuses it without `merge`, so a blur landing on a name that happens to
+      // exist offers the button instead of quietly merging.
+      const mergeBtn = document.createElement('button');
+      mergeBtn.className = 'credential-merge-btn hidden';
+      const offer = opencodeMergeOffer(mergeBtn, (name) => applyNaming(name, true));
+      const applyNaming = async (name, merge) => {
+        const at = offer.revision();
+        // 'ambient' stores a reference rather than the key, so a key rotated
+        // inside OpenCode keeps being read live.
+        const result = await window.tokenMonitor.opencode.saveProfile(name, '', 'ambient', { merge });
+        if (!result.ok) {
+          if (result.nameTaken) {
+            offer.offer(at, name, t('settings.opencode.mergeInto', { name }));
+            return;
+          }
+          if (offer.stale(at)) return;
+          const errorEl = document.getElementById('opencodeErrorMessage');
+          errorEl.textContent = opencodeSaveErrorText(result);
+          errorEl.classList.remove('hidden');
+          return;
+        }
+        renderOpenCodeProfiles();
+        updateOpenCodeProfilesStatus();
+        renderSettingsSummaries();
+      };
+      const endNaming = async (save) => {
+        const name = nameInput.value.trim();
+        if (!save || !name) {
+          nameInput.value = '';
+          offer.withdraw();
+          return;
+        }
+        await applyNaming(name, false);
+      };
+      // Editing the name withdraws the offer: the confirmation names one account,
+      // and it must be the one on screen when the user clicks it.
+      nameInput.addEventListener('input', () => offer.withdraw());
+      nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') endNaming(true);
+        if (e.key === 'Escape') endNaming(false);
+      });
+      nameInput.addEventListener('blur', () => endNaming(true));
+
+      const detail = document.createElement('span');
+      detail.className = 'profile-detail';
+      detail.textContent = t('settings.opencode.ambientDetail');
+      nameBox.append(nameInput, mergeBtn, detail);
+
+      const rightBox = document.createElement('span');
+      rightBox.className = 'profile-right';
+      const infoSpan = document.createElement('span');
+      infoSpan.className = 'profile-info';
+      // Not `opencode-info-<name>`: that shape is generated from user-chosen
+      // account names, so a profile named the same as any sentinel would take
+      // this row's status.
+      infoSpan.id = 'opencodeAmbientInfo';
+      infoSpan.textContent = ambientEnabled ? '...' : t('settings.opencode.disabled');
+      rightBox.append(infoSpan);
+      item.append(ambientToggle, nameBox, rightBox);
+      listEl.appendChild(item);
+    }
+
+    state.opencodeProfileCount = entries.length + (hasAmbientKey ? 1 : 0);
     renderSettingsSummaries();
 
     for (const [name, profile] of entries) {
@@ -12619,18 +15103,43 @@ function renderOpenCodeProfiles() {
         nameInput.focus();
         nameInput.select();
       }
-      function endRename(save) {
+      // Renaming onto an existing account merges the two, which asserts they are
+      // the same OpenCode account. That claim gets a visible button rather than
+      // a repeated keypress: confirming should be something the user chooses,
+      // not something they discover by pressing Enter again.
+      const mergeBtn = document.createElement('button');
+      mergeBtn.className = 'credential-merge-btn hidden';
+      const offer = opencodeMergeOffer(mergeBtn, (next) => applyRename(next, true));
+      const applyRename = async (next, merge) => {
+        const at = offer.revision();
+        const errorEl = document.getElementById('opencodeErrorMessage');
+        const result = await api.renameProfile(name, next, { merge });
+        if (!result.ok) {
+          if (result.nameTaken) {
+            offer.offer(at, next, t('settings.opencode.mergeInto', { name: next }));
+            return;
+          }
+          if (offer.stale(at)) return;
+          errorEl.textContent = opencodeSaveErrorText(result);
+          errorEl.classList.remove('hidden');
+          return;
+        }
+        errorEl.classList.add('hidden');
+        renderOpenCodeProfiles();
+        updateOpenCodeProfilesStatus();
+        renderSettingsSummaries();
+      };
+      // Retyping withdraws the offer, so the button can only ever confirm the
+      // name the user is currently proposing.
+      nameInput.addEventListener('input', () => offer.withdraw());
+      async function endRename(save) {
         if (!editing) return;
         editing = false;
         nameInput.classList.add('hidden');
         nameSpan.classList.remove('hidden');
-        if (save && nameInput.value.trim() && nameInput.value.trim() !== name) {
-          api.renameProfile(name, nameInput.value.trim()).then(() => {
-            renderOpenCodeProfiles();
-            updateOpenCodeProfilesStatus();
-            renderSettingsSummaries();
-          });
-        }
+        const next = nameInput.value.trim();
+        if (!save || !next || next === name) return;
+        await applyRename(next, false);
       }
       renameBtn.addEventListener('click', beginRename);
       nameInput.addEventListener('keydown', (e) => {
@@ -12639,14 +15148,54 @@ function renderOpenCodeProfiles() {
       });
       nameInput.addEventListener('blur', () => endRename(true));
 
-      nameBox.append(nameSpan, nameInput, renameBtn);
+      // Which credentials this account holds. Two of them under one name is the
+      // user's assertion that they are the same OpenCode account, and that
+      // assertion decides which source answers for quota and which identity the
+      // account is published under, so it stays visible. Acting on them lives in
+      // the expanded section rather than inline: a click that unbinds an account
+      // should not sit one pixel from the account's own controls.
+      // A reference the collector has stopped using says so on its own row.
+      // Otherwise an account that also holds a cookie shows the credential as
+      // present, keeps reporting fine from the cookie, and nothing anywhere
+      // reveals that its Go quota is no longer coming from the detected key.
+      const ambientLabel = profile.ambientStale
+        ? `${t('settings.opencode.ambientName')} · ${t('settings.opencode.needsRebind')}`
+        : t('settings.opencode.ambientName');
+      const credentials = [
+        ['ambient', profile.usesAmbientKey, ambientLabel],
+        ['api', profile.hasApiKey, t('settings.opencode.kindApi')],
+        ['cookie', profile.hasCookie, t('settings.opencode.kindCookie')]
+      ].filter(([, present]) => present);
+
+      // The summary line is the control that expands it: clicking the thing you
+      // want to see beats a separate chevron stranded between the status text
+      // and the delete button.
+      const multiCredential = credentials.length > 1;
+      const detail = document.createElement(multiCredential ? 'button' : 'span');
+      detail.className = 'profile-detail';
+      let chevron = null;
+      if (multiCredential) {
+        detail.type = 'button';
+        detail.classList.add('is-expandable');
+        detail.setAttribute('aria-expanded', 'false');
+        detail.title = t('settings.opencode.showCredentials');
+        // The same disclosure chevron every other group uses, so it animates and
+        // reads the same; only the direction differs, pointing right when closed.
+        chevron = document.createElement('span');
+        chevron.className = 'cursor-disclosure-icon';
+        chevron.setAttribute('aria-hidden', 'true');
+      }
+      detail.textContent = credentials.map(([, , label]) => label).join(' + ');
+      if (chevron) detail.append(chevron);
+
+      nameBox.append(nameSpan, nameInput, renameBtn, mergeBtn, detail);
 
       const rightBox = document.createElement('span');
       rightBox.className = 'profile-right';
 
       const infoSpan = document.createElement('span');
       infoSpan.className = 'profile-info';
-      infoSpan.id = 'opencode-info-' + name.replace(/[^a-zA-Z0-9_-]/g, '_');
+      infoSpan.id = opencodeRowId('opencode-info-', name);
       infoSpan.textContent = profile.enabled ? '...' : t('settings.opencode.disabled');
 
       const deleteBtn = document.createElement('button');
@@ -12668,8 +15217,32 @@ function renderOpenCodeProfiles() {
         renderSettingsSummaries();
       });
 
+      // Expanding is only worth offering once an account holds more than one
+      // credential — with a single one the row already says everything.
+      let credentialList = null;
+      if (multiCredential) {
+        credentialList = document.createElement('div');
+        credentialList.className = 'opencode-credential-list accordion-animated-container hidden';
+        credentialList.id = opencodeRowId('opencode-credentials-', name);
+        // The shared accordion squeezes one inner wrapper, so the rows go inside
+        // it rather than on the container, which cannot shrink.
+        const credentialInner = document.createElement('div');
+        credentialInner.className = 'accordion-animation-inner';
+        for (const [kind, , label] of credentials) {
+          credentialInner.append(opencodeCredentialRow(name, kind, label));
+        }
+        credentialList.append(credentialInner);
+        detail.setAttribute('aria-controls', credentialList.id);
+        detail.addEventListener('click', () => {
+          const open = credentialList.classList.toggle('hidden') === false;
+          detail.setAttribute('aria-expanded', String(open));
+          detail.classList.toggle('is-open', open);
+        });
+      }
+
       rightBox.append(infoSpan, deleteBtn);
       item.append(toggle, nameBox, rightBox);
+      if (credentialList) item.append(credentialList);
       listEl.appendChild(item);
     }
 
@@ -12677,17 +15250,200 @@ function renderOpenCodeProfiles() {
   });
 }
 
+// A merge that would land two credentials of the same kind on one account is
+// refused rather than resolved: confirming that two accounts are the same is a
+// different question from choosing which of two cookies to keep.
+function opencodeSaveErrorText(result) {
+  if (result?.credentialConflict) {
+    return t('settings.opencode.credentialConflict', {
+      kind: t(result.kind === 'cookie' ? 'settings.opencode.kindCookie'
+        : result.kind === 'ambient' ? 'settings.opencode.ambientName'
+          : 'settings.opencode.kindApi')
+    });
+  }
+  return result?.error || t('settings.opencode.saveFailedShort');
+}
+
+// A merge confirmation names one specific proposal: this credential, into this
+// account. Editing the field withdraws it, so the click the main process
+// receives is consent to what the user is looking at.
+//
+// Hiding the button is not enough on its own, because the answer that offers it
+// arrives after an await: an edit made while that request is in flight is
+// overtaken by the reply, and the button comes back describing the proposal the
+// user has just moved on from. So a withdrawal advances a revision the reply is
+// checked against, and a reply from a superseded revision is dropped rather
+// than shown. The same rule reached four call sites by copy, which is why it
+// lives in one place now.
+//
+// There is deliberately one way to take an offer down. A plain hide looks
+// harmless on the cancel paths (Escape, a blur onto nothing) but leaves the
+// revision where it was, so the reply to the request the user just cancelled
+// still matched and put the button back — the original bug, reached through the
+// other door. Everything that ends an offer withdraws it.
+function opencodeMergeOffer(button, confirm) {
+  let revision = 0;
+  let pending = '';
+  button.addEventListener('click', () => {
+    if (pending !== '') confirm(pending);
+  });
+  return {
+    // Captured before the await, compared after it.
+    revision: () => revision,
+    stale: (at) => at !== revision,
+    withdraw: () => {
+      revision += 1;
+      pending = '';
+      button.classList.add('hidden');
+    },
+    offer: (at, name, label) => {
+      if (at !== revision) return;
+      pending = name;
+      button.textContent = label;
+      button.classList.remove('hidden');
+    }
+  };
+}
+
+// Element ids for a row, from the account name.
+//
+// Reversible rather than sanitized. Replacing everything outside a safe set with
+// `_` is not injective, so two accounts a user is perfectly entitled to name —
+// `a b` and `a_b`, or `a/b` and `a_b` — landed on one id, and whichever rendered
+// first collected the other's status. `encodeURIComponent` is injective and
+// leaves no whitespace, which is the only thing an id may not contain.
+//
+// A counter would work too, but these two call sites are independent: one
+// renders the row, the other looks it up from a later status reply. A pure
+// function of the name cannot drift between them the way a shared table can.
+function opencodeRowId(prefix, name) {
+  return `${prefix}${encodeURIComponent(name)}`;
+}
+
+// One credential inside an expanded account. Renaming moves it to another
+// account name, which is what splits a binding apart or forms a new one;
+// deleting drops just this credential and leaves the rest of the account.
+function opencodeCredentialRow(accountName, kind, label) {
+  const api = window.tokenMonitor.opencode;
+  const errorEl = () => document.getElementById('opencodeErrorMessage');
+  const refresh = () => {
+    renderOpenCodeProfiles();
+    updateOpenCodeProfilesStatus();
+    renderSettingsSummaries();
+  };
+
+  const row = document.createElement('div');
+  row.className = 'opencode-credential-row';
+
+  const labelSpan = document.createElement('span');
+  labelSpan.className = 'credential-label';
+  labelSpan.textContent = label;
+
+  // The account name is shown on every credential rather than hidden behind an
+  // edit button, because seeing the same name twice is the explanation for why
+  // these are one account. Typing a different one moves that credential out.
+  const nameInput = document.createElement('input');
+  nameInput.className = 'credential-name-input';
+  nameInput.type = 'text';
+  nameInput.value = accountName;
+  nameInput.title = t('settings.opencode.moveCredential', { kind: label });
+  nameInput.placeholder = t('settings.opencode.profileNamePlaceholder');
+
+  const actions = document.createElement('span');
+  actions.className = 'credential-actions';
+
+  // A merge is a claim that two credentials belong to one OpenCode account, so
+  // it is confirmed with a visible button rather than by pressing the same key
+  // twice and hoping the user reads why.
+  const mergeBtn = document.createElement('button');
+  mergeBtn.className = 'credential-merge-btn hidden';
+  const offer = opencodeMergeOffer(mergeBtn, (target) => finishMove(target, true));
+
+  const finishMove = async (target, merge) => {
+    const at = offer.revision();
+    const result = await api.moveCredential(accountName, kind, target, { merge });
+    if (!result.ok) {
+      if (result.nameTaken) {
+        offer.offer(at, target, t('settings.opencode.mergeInto', { name: target }));
+        return;
+      }
+      if (offer.stale(at)) return;
+      errorEl().textContent = opencodeSaveErrorText(result);
+      errorEl().classList.remove('hidden');
+      return;
+    }
+    refresh();
+  };
+  const endMove = async (save) => {
+    const target = nameInput.value.trim();
+    if (!save || !target || target === accountName) {
+      nameInput.value = accountName;
+      offer.withdraw();
+      return;
+    }
+    await finishMove(target, false);
+  };
+
+  // Same rule as everywhere else: retyping the target withdraws the pending
+  // confirmation rather than leaving a button that would move it somewhere the
+  // user is no longer proposing.
+  nameInput.addEventListener('input', () => offer.withdraw());
+  nameInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') endMove(true);
+    if (e.key === 'Escape') endMove(false);
+  });
+  nameInput.addEventListener('blur', () => endMove(true));
+
+  const removeBtn = document.createElement('button');
+  removeBtn.className = 'profile-delete';
+  removeBtn.textContent = '✕';
+  removeBtn.title = t('settings.opencode.removeCredential', { kind: label });
+  // Two-step, like deleting an account: unbinding is not undoable from here.
+  let confirming = false;
+  removeBtn.addEventListener('click', async () => {
+    if (!confirming) {
+      confirming = true;
+      removeBtn.classList.add('confirming');
+      removeBtn.textContent = '✓';
+      return;
+    }
+    const result = await api.removeCredential(accountName, kind);
+    if (result.ok) refresh();
+  });
+
+  actions.append(removeBtn);
+  // The merge label carries the target account name and never fits beside the
+  // input, so it trails the row and wraps onto its own line when it appears.
+  row.append(labelSpan, nameInput, actions, mergeBtn);
+  return row;
+}
+
 async function updateOpenCodeProfilesStatus() {
   const api = window.tokenMonitor.opencode;
   const status = await api.status();
   const profiles = status.profiles || {};
 
-  for (const [name, s] of Object.entries(profiles)) {
-    const safeName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
-    const infoEl = document.getElementById('opencode-info-' + safeName);
+  // The auto-detected key has no account name, so it arrives in its own field
+  // and lands on its own element rather than one keyed by a name a user could
+  // also type.
+  const entries = Object.entries(profiles).map(([name, s]) => [
+    opencodeRowId('opencode-info-', name),
+    s
+  ]);
+  if (status.ambient) entries.push(['opencodeAmbientInfo', status.ambient]);
+
+  for (const [elementId, s] of entries) {
+    const infoEl = document.getElementById(elementId);
     if (!infoEl) continue;
 
-    if (s.expired) {
+    if (s.disabled) {
+      infoEl.textContent = t('settings.opencode.disabled');
+    } else if (s.needsRebind) {
+      // Said once, on the credential line, which has room for it and is the
+      // thing that needs re-attaching. This cell is a fixed narrow column and
+      // would only repeat it truncated.
+      infoEl.textContent = '';
+    } else if (s.expired) {
       infoEl.textContent = t('settings.opencode.statusExpired');
     } else if (s.linked) {
       const parts = [];
@@ -12705,15 +15461,19 @@ async function updateOpenCodeProfilesStatus() {
     }
   }
 
-  renderOpenCodeProfilesStatusSummary(profiles);
+  renderOpenCodeProfilesStatusSummary(profiles, status.ambient);
 }
 
-function renderOpenCodeProfilesStatusSummary(profiles) {
+// `ambient` counts toward both halves: it is a row in the list and it is what
+// the limits card reads on a machine with nothing configured, so leaving it out
+// reports "0/0" beside live quota.
+function renderOpenCodeProfilesStatusSummary(profiles, ambient = null) {
   const totalEl = document.getElementById('opencodeCookieStatus');
   if (totalEl) {
-    const linkedCount = Object.values(profiles).filter(s => s.linked).length;
+    const statuses = [...Object.values(profiles), ...(ambient ? [ambient] : [])];
+    const linkedCount = statuses.filter(s => s.linked).length;
     const configuredProfileCount = state.opencodeProfileCount || 0;
-    const totalCount = Math.max(Object.keys(profiles).length, configuredProfileCount);
+    const totalCount = Math.max(statuses.length, configuredProfileCount);
     if (totalCount > 0) {
       totalEl.textContent = t('settings.opencode.connected', { linked: linkedCount, total: totalCount });
     } else {
@@ -12811,12 +15571,18 @@ function openrouterProfileErrorText(result) {
   return result?.error || t('settings.openrouter.saveFailedShort');
 }
 
-function thirdPartyProfileErrorText(result) {
+function thirdPartyProfileErrorText(result, adapter = '') {
   if (result?.errorCode === 'invalidName') return t('settings.thirdparty.invalidName');
   if (result?.errorCode === 'invalidAdapter') return t('settings.thirdparty.invalidAdapter');
   if (result?.errorCode === 'invalidBaseUrl') return t('settings.thirdparty.invalidBaseUrl');
+  if (result?.errorCode === 'missingAccessToken' && adapter === 'sub2api') {
+    return t('settings.thirdparty.missingSub2ApiToken');
+  }
   if (result?.errorCode === 'missingAccessToken') return t('settings.thirdparty.missingAccessToken');
   if (result?.errorCode === 'missingApiKey') return t('settings.thirdparty.missingApiKey');
+  if (result?.errorCode === 'invalidCredential' && adapter === 'sub2api') {
+    return t('settings.thirdparty.sub2ApiCredentialRejected');
+  }
   if (result?.errorCode === 'invalidEndpointPath') return t('settings.thirdparty.invalidEndpointPath');
   if (result?.errorCode === 'invalidAuthMode') return t('settings.thirdparty.invalidAuthMode');
   if (result?.errorCode === 'invalidJsonPath') return t('settings.thirdparty.invalidJsonPath');
@@ -12969,6 +15735,7 @@ function appendNamedApiProfileRow(listEl, config) {
 }
 
 function renderNamedApiProfiles(config) {
+  if (!isSettingsSurfaceVisible()) return;
   const {
     providerId,
     profileSettingsKey,
@@ -12983,6 +15750,7 @@ function renderNamedApiProfiles(config) {
   const listEl = document.getElementById(`${providerId}ProfileList`);
   if (!listEl || !api) return;
   api.getProfiles().then(({ profiles, hasEnvVar }) => {
+    if (!isSettingsSurfaceVisible()) return;
     listEl.replaceChildren();
     state.settings[profileSettingsKey] = profiles;
     state.settings[envConfiguredKey] = Boolean(hasEnvVar);
@@ -13056,7 +15824,9 @@ function renderThirdPartyProfiles() {
         ? t('settings.thirdparty.detailNewApiKey')
         : profile?.adapter === 'custom'
           ? t('settings.thirdparty.detailCustom')
-          : t('settings.thirdparty.detailNewApiAccount');
+          : profile?.adapter === 'sub2api'
+            ? t('settings.thirdparty.detailSub2Api')
+            : t('settings.thirdparty.detailNewApiAccount');
       let host = '';
       try { host = new URL(String(profile?.baseUrl || '')).host; } catch (_) {}
       return [adapter, host].filter(Boolean).join(' · ');
@@ -13065,13 +15835,11 @@ function renderThirdPartyProfiles() {
 }
 
 function renderCursorStatus() {
+  if (!isSettingsSurfaceVisible()) return;
   const statusEl = document.getElementById('cursorAccountStatus');
-  const loginBtn = document.getElementById('cursorLoginButton');
-  const logoutBtn = document.getElementById('cursorLogoutButton');
-  const refreshBtn = document.getElementById('cursorRefreshButton');
-  const manualPanel = document.getElementById('cursorManualPanel');
+  const listEl = document.getElementById('cursorAccountList');
   const errorEl = document.getElementById('cursorErrorMessage');
-  if (!statusEl || !loginBtn || !logoutBtn || !refreshBtn || !manualPanel || !errorEl) return;
+  if (!statusEl || !listEl || !errorEl) return;
 
   errorEl.classList.add('hidden');
   errorEl.textContent = '';
@@ -13080,11 +15848,7 @@ function renderCursorStatus() {
     setCursorStatusText(statusEl, t('settings.common.error'));
     errorEl.textContent = t('settings.cursor.statusCheckFailed', { message: state.cursorAccount.error });
     errorEl.classList.remove('hidden');
-    loginBtn.classList.remove('hidden');
-    logoutBtn.classList.add('hidden');
-    refreshBtn.classList.remove('hidden');
-    manualPanel.classList.remove('hidden');
-    setCursorCheckboxesEnabled(false);
+    setCursorCheckboxesEnabled(Boolean(state.cursorAccount.status?.accounts?.length));
     setSettingsSectionExpanded('limits', true);
     setCursorAccountExpanded(true);
     renderSettingsSummaries();
@@ -13098,46 +15862,115 @@ function renderCursorStatus() {
     return;
   }
 
-  if (!status.loggedIn) {
-    setCursorStatusText(statusEl, t('settings.cursor.notLoggedIn'));
-    loginBtn.classList.remove('hidden');
-    logoutBtn.classList.add('hidden');
-    refreshBtn.classList.add('hidden');
-    manualPanel.classList.remove('hidden');
-    setCursorCheckboxesEnabled(false);
-    renderSettingsSummaries();
-    return;
-  }
-  if (status.expired) {
-    setCursorStatusText(statusEl, t('settings.cursor.expired'));
-    loginBtn.classList.remove('hidden');
-    logoutBtn.classList.remove('hidden');
-    refreshBtn.classList.remove('hidden');
-    manualPanel.classList.remove('hidden');
-    setCursorCheckboxesEnabled(false);
-    setSettingsSectionExpanded('limits', true);
-    setCursorAccountExpanded(true);
-    renderSettingsSummaries();
-    return;
-  }
-  const summary = status.email || t('settings.cursor.loggedIn');
+  const accounts = Array.isArray(status.accounts) ? status.accounts : [];
+  const managementBlocked = status.managementBlocked === true;
+  document.getElementById('cursorAgentActiveNote')?.classList.toggle('hidden', !managementBlocked);
+  const addButton = document.getElementById('cursorAddAccountButton');
+  if (addButton) addButton.disabled = managementBlocked;
+  const summary = accounts.length === 0
+    ? t('settings.cursor.notLoggedIn')
+    : t('settings.cursor.connected', { linked: status.linkedCount || 0, total: accounts.length });
   setCursorStatusText(statusEl, summary);
-  loginBtn.classList.add('hidden');
-  logoutBtn.classList.remove('hidden');
-  refreshBtn.classList.remove('hidden');
-  manualPanel.classList.add('hidden');
-  setCursorCheckboxesEnabled(true);
+  setCursorCheckboxesEnabled(accounts.some((account) => !account.expired && !account.error));
+  listEl.replaceChildren();
+  if (accounts.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'settings-note';
+    empty.textContent = t('settings.cursor.empty');
+    listEl.append(empty);
+  } else {
+    for (const account of accounts) {
+      const enabled = account.enabled !== false;
+      const row = document.createElement('div');
+      row.className = 'managed-account-row';
+      row.classList.toggle('disabled', !enabled);
+      const fallbackId = String(account.id || '');
+      const accountName = account.email || account.label || (fallbackId ? `…${fallbackId.slice(-8)}` : t('settings.cursor.unnamedAccount'));
+      const input = document.createElement('input');
+      input.className = 'managed-account-checkbox';
+      input.type = 'checkbox';
+      input.checked = enabled;
+      input.setAttribute('aria-label', t('settings.cursor.toggleAccount', { account: accountName }));
+      const main = document.createElement('div');
+      main.className = 'managed-account-main';
+      const name = document.createElement('div');
+      name.className = 'managed-account-email';
+      name.textContent = accountName;
+      main.append(name);
+      const planLabel = account.membershipType
+        ? limitProviderPresentationApi.limitProviderDisplayLabel(account.membershipType)
+        : t('settings.cursor.webAccount');
+      input.addEventListener('change', async () => {
+        input.disabled = true;
+        const result = await window.tokenMonitor.cursor.setAccountEnabled(account.id, input.checked);
+        if (!result?.ok) {
+          state.cursorAccount = { ...state.cursorAccount, error: result?.error || t('settings.cursor.toggleFailed') };
+        } else {
+          state.cursorAccount = { status: result.status, error: '', busy: false };
+          refreshStats({ force: true }).catch(() => {});
+        }
+        renderCursorStatus();
+      });
+      const right = document.createElement('span');
+      right.className = 'managed-account-right';
+      const info = document.createElement('div');
+      info.className = 'managed-account-info';
+      info.textContent = !enabled
+        ? t('settings.cursor.disabled')
+        : account.expired
+          ? t('settings.cursor.expiredShort')
+          : account.error
+            ? t('settings.common.error')
+            : planLabel;
+      info.title = info.textContent;
+      right.append(info);
+      if (account.removable === true && !managementBlocked) {
+        const remove = document.createElement('button');
+        remove.type = 'button';
+        remove.className = 'managed-account-remove';
+        remove.textContent = '✕';
+        remove.title = t('settings.cursor.remove');
+        remove.setAttribute('aria-label', t('settings.cursor.remove'));
+        let confirmingRemove = false;
+        remove.addEventListener('click', async () => {
+          if (!confirmingRemove) {
+            confirmingRemove = true;
+            remove.classList.add('confirming');
+            remove.textContent = '✓';
+            remove.title = t('settings.cursor.removeConfirm', { account: accountName });
+            remove.setAttribute('aria-label', remove.title);
+            return;
+          }
+          remove.disabled = true;
+          const result = await window.tokenMonitor.cursor.logout(account.id);
+          if (!result?.ok) {
+            const message = result?.code === 'EXTERNAL_AGENT_ACTIVE'
+              ? t('settings.cursor.agentActive')
+              : result?.error || t('settings.cursor.removeFailed');
+            state.cursorAccount = { ...state.cursorAccount, error: message };
+          } else {
+            state.cursorAccount = { status: result.status, error: '', busy: false };
+            refreshStats({ force: true }).catch(() => {});
+          }
+          renderCursorStatus();
+        });
+        right.append(remove);
+      }
+      row.append(input, main, right);
+      listEl.append(row);
+    }
+  }
   renderSettingsSummaries();
 }
 
-async function refreshCursorStatus() {
-  state.cursorAccount = { status: null, error: '' };
+async function refreshCursorStatus({ force = false, discover = false } = {}) {
+  state.cursorAccount = { status: null, error: '', busy: true };
   renderCursorStatus();
   try {
-    const status = await window.tokenMonitor.cursor.status();
-    state.cursorAccount = { status, error: '' };
+    const status = await window.tokenMonitor.cursor.status({ force, discover });
+    state.cursorAccount = { status, error: '', busy: false };
   } catch (err) {
-    state.cursorAccount = { status: null, error: err.message };
+    state.cursorAccount = { status: null, error: err.message, busy: false };
   }
   renderCursorStatus();
 }
@@ -13163,6 +15996,7 @@ function customPricingMeta(ov) {
 }
 
 function renderCustomPricing() {
+  if (!isSettingsSurfaceVisible()) return;
   const listEl = document.getElementById('customPricingList');
   const statusEl = document.getElementById('customPricingStatus');
   if (!listEl) return;
@@ -13332,9 +16166,7 @@ function setupCustomPricingUI() {
       outputPerM: outputEl.value === '' ? undefined : Number(outputEl.value),
       cacheReadPerM: cacheReadEl.value === '' ? undefined : Number(cacheReadEl.value)
     };
-    const hasInput = typeof entry.inputPerM === 'number' && entry.inputPerM > 0;
-    const hasOutput = typeof entry.outputPerM === 'number' && entry.outputPerM > 0;
-    if (!hasInput && !hasOutput) { showError(t('settings.customPricing.errorNoPrice')); return; }
+    if (!customPricingFormApi.hasUsableBasePrice(entry)) { showError(t('settings.customPricing.errorNoPrice')); return; }
     const next = customPricingFormApi.upsertOverride(state.settings?.customModelPricing || [], entry);
     await saveSettings({ customModelPricing: next });
     closeForm();
@@ -13487,22 +16319,27 @@ function setupCursorAccountUI() {
   }
 
   document.getElementById('cursorSettingsToggle').addEventListener('click', () => {
-    setCursorAccountExpanded(!state.cursorAccountExpanded);
+    const expanding = !state.cursorAccountExpanded;
+    setCursorAccountExpanded(expanding);
+    if (expanding && !state.cursorAccount.busy) void refreshCursorStatus({ discover: true });
   });
   setCursorAccountExpanded(false);
 
+  const cursorAddAccountButton = document.getElementById('cursorAddAccountButton');
+  const cursorManualDetails = document.getElementById('cursorManualDetails');
+  function setCursorManualExpanded(expanded) {
+    const next = Boolean(expanded);
+    cursorAddAccountButton?.setAttribute('aria-expanded', next ? 'true' : 'false');
+    cursorManualDetails?.classList.toggle('hidden', !next);
+    document.getElementById('cursorManualPanel')?.classList.toggle('expanded', next);
+  }
+  cursorAddAccountButton?.addEventListener('click', () => {
+    setCursorManualExpanded(cursorManualDetails?.classList.contains('hidden'));
+  });
+  setCursorManualExpanded(false);
+
   document.getElementById('cursorLoginButton').addEventListener('click', () => {
-    window.tokenMonitor.openExternal('https://cursor.com/settings');
-  });
-
-  document.getElementById('cursorLogoutButton').addEventListener('click', async () => {
-    await window.tokenMonitor.cursor.logout();
-    await refreshCursorStatus();
-    await refreshStats({ force: true });
-  });
-
-  document.getElementById('cursorRefreshButton').addEventListener('click', () => {
-    refreshCursorStatus();
+    window.tokenMonitor.openExternal('https://cursor.com/dashboard');
   });
 
   document.getElementById('cursorManualSubmit').addEventListener('click', async () => {
@@ -13511,17 +16348,21 @@ function setupCursorAccountUI() {
     errorEl.classList.add('hidden');
     const result = await window.tokenMonitor.cursor.loginManual(input.value);
     if (!result.ok) {
-      errorEl.textContent = t('settings.cursor.loginFailed', { message: result.error });
+      const message = result.code === 'EXTERNAL_AGENT_ACTIVE'
+        ? t('settings.cursor.agentActive')
+        : result.error;
+      errorEl.textContent = t('settings.cursor.loginFailed', { message });
       errorEl.classList.remove('hidden');
       return;
     }
     input.value = '';
-    await refreshCursorStatus();
-    setCursorAccountExpanded(false);
+    state.cursorAccount = { status: result.status, error: '', busy: false };
+    renderCursorStatus();
+    setCursorManualExpanded(false);
     await refreshStats({ force: true });
   });
 
-  refreshCursorStatus();
+  refreshCursorStatus({ discover: true });
 
   const opencodeToggle = document.getElementById('opencodeSettingsToggle');
   if (opencodeToggle) {
@@ -13545,26 +16386,112 @@ function setupCursorAccountUI() {
       window.tokenMonitor.openExternal('https://opencode.ai/auth');
     });
 
+    // API key is the default: it needs no browser round trip. The cookie stays
+    // selectable because it is the only thing that reaches the Zen balance.
+    const kindSelect = document.getElementById('opencodeCredentialKind');
+    // The merge confirmation is about one specific proposal: this name, this
+    // credential. Editing any part of the form makes the offer on screen stale,
+    // and a confirmation the user gives has to be a confirmation of what they
+    // are looking at, so any edit withdraws it.
+    const addMergeButton = document.getElementById('opencodeCredentialMerge');
+    // Confirming re-runs the submit handler's own closure, which is what holds
+    // the name and credential the offer was made for.
+    let confirmOpenCodeMerge = () => {};
+    const addMergeOffer = addMergeButton
+      ? opencodeMergeOffer(addMergeButton, () => confirmOpenCodeMerge())
+      : null;
+    const clearOpenCodeMergeOffer = () => addMergeOffer?.withdraw();
+    for (const id of ['opencodeProfileName', 'opencodeApiKeyInput', 'opencodeCookieInput']) {
+      document.getElementById(id)?.addEventListener('input', clearOpenCodeMergeOffer);
+    }
+    const applyOpenCodeCredentialKind = () => {
+      const isCookie = kindSelect?.value === 'cookie';
+      document.getElementById('opencodeApiFields')?.classList.toggle('hidden', isCookie);
+      document.getElementById('opencodeCookieFields')?.classList.toggle('hidden', !isCookie);
+      // One button for both modes; only what it is fetching differs. The keys
+      // page itself lives under a workspace id we do not have, so both land on
+      // the console sign-in.
+      const browserButton = document.getElementById('opencodeOpenBrowser');
+      if (browserButton) {
+        const key = isCookie ? 'settings.opencode.openBrowser' : 'settings.opencode.openBrowserKeys';
+        browserButton.dataset.i18n = key;
+        browserButton.textContent = t(key);
+      }
+      // Clear the field being hidden so a value typed under one credential type
+      // can never be submitted as the other.
+      const stale = document.getElementById(isCookie ? 'opencodeApiKeyInput' : 'opencodeCookieInput');
+      if (stale) stale.value = '';
+      document.getElementById('opencodeErrorMessage')?.classList.add('hidden');
+      clearOpenCodeMergeOffer();
+    };
+    kindSelect?.addEventListener('change', applyOpenCodeCredentialKind);
+    applyOpenCodeCredentialKind();
+
     document.getElementById('opencodeCookieSubmit').addEventListener('click', async () => {
-      const input = document.getElementById('opencodeCookieInput');
+      const opencodeCredentialKind = kindSelect?.value === 'cookie' ? 'cookie' : 'api';
+      const input = document.getElementById(opencodeCredentialKind === 'cookie'
+        ? 'opencodeCookieInput'
+        : 'opencodeApiKeyInput');
       const nameInput = document.getElementById('opencodeProfileName');
       const errorEl = document.getElementById('opencodeErrorMessage');
-      const name = (nameInput.value || '').trim() || 'default';
+      const name = (nameInput.value || '').trim();
       const cookie = input.value;
 
       errorEl.classList.add('hidden');
 
-      const result = await window.tokenMonitor.opencode.saveProfile(name, cookie);
-      if (result.ok) {
-        input.value = '';
-        nameInput.value = '';
-        renderOpenCodeProfiles();
-        updateOpenCodeProfilesStatus();
-        renderSettingsSummaries();
-      } else {
-        errorEl.textContent = result.error || t('settings.opencode.saveFailedShort');
+      // The name is required rather than defaulted. Saving one credential keeps
+      // the other under the same name, and the collector reads that as "these
+      // are the same account", so a blank name silently becoming `default`
+      // could attach one account's key to another account's cookie. Making the
+      // user type the name is what keeps the association explicit.
+      if (!name) {
+        errorEl.textContent = t('settings.opencode.nameRequired');
         errorEl.classList.remove('hidden');
+        nameInput.focus();
+        return;
       }
+
+      // A name that already holds a different credential kind binds the two into
+      // one account, so the main process refuses it and the form asks first.
+      // The confirmation replaces the submit button rather than appearing beside
+      // it: the next click has different consequences from the one just made.
+      const submit = async (merge) => {
+        const at = addMergeOffer?.revision();
+        confirmOpenCodeMerge = () => submit(true);
+        const result = await window.tokenMonitor.opencode.saveProfile(
+          name,
+          cookie,
+          opencodeCredentialKind,
+          { merge }
+        );
+        // Whether or not the form still shows this proposal, a save that landed
+        // has to reach the list. Only the fields are left alone, so an edit made
+        // while the request was in flight is not wiped by its reply.
+        const stale = addMergeOffer ? addMergeOffer.stale(at) : false;
+        if (result.ok) {
+          // Only this proposal's own offer is taken down. Two saves can overlap,
+          // and the newer one can answer first: clearing unconditionally let an
+          // older success wipe a merge confirmation the user was looking at and
+          // that was still correct.
+          if (!stale) {
+            input.value = '';
+            nameInput.value = '';
+            addMergeOffer?.withdraw();
+          }
+          renderOpenCodeProfiles();
+          updateOpenCodeProfilesStatus();
+          renderSettingsSummaries();
+          return;
+        }
+        if (stale) return;
+        if (result.nameTaken && addMergeOffer) {
+          addMergeOffer.offer(at, name, t('settings.opencode.mergeInto', { name }));
+          return;
+        }
+        errorEl.textContent = opencodeSaveErrorText(result);
+        errorEl.classList.remove('hidden');
+      };
+      await submit(false);
     });
   }
 
@@ -13643,6 +16570,7 @@ function setupCursorAccountUI() {
     document.getElementById('thirdpartyProfileSubmit')?.addEventListener('click', async () => {
       const nameInput = document.getElementById('thirdpartyProfileName');
       const accessTokenInput = document.getElementById('thirdpartyAccessTokenInput');
+      const refreshTokenInput = document.getElementById('thirdpartyRefreshTokenInput');
       const userIdInput = document.getElementById('thirdpartyUserIdInput');
       const keyInput = document.getElementById('thirdpartyApiKeyInput');
       const endpointPathInput = document.getElementById('thirdpartyEndpointPathInput');
@@ -13657,6 +16585,7 @@ function setupCursorAccountUI() {
       const adapter = selectedThirdPartyAdapter();
       const baseUrl = String(baseUrlInput?.value || '').trim();
       const accessToken = String(accessTokenInput?.value || '').trim();
+      const refreshToken = String(refreshTokenInput?.value || '').trim();
       const userId = String(userIdInput?.value || '').trim();
       const apiKey = String(keyInput?.value || '').trim();
       errorEl?.classList.add('hidden');
@@ -13665,6 +16594,7 @@ function setupCursorAccountUI() {
         adapter,
         baseUrl,
         accessToken,
+        refreshToken,
         userId,
         apiKey,
         endpointPath: String(endpointPathInput?.value || '').trim(),
@@ -13680,6 +16610,7 @@ function setupCursorAccountUI() {
         baseUrlInput.value = '';
         updateThirdPartyHttpWarning();
         accessTokenInput.value = '';
+        refreshTokenInput.value = '';
         userIdInput.value = '';
         keyInput.value = '';
         endpointPathInput.value = '/user/balance';
@@ -13692,7 +16623,7 @@ function setupCursorAccountUI() {
         renderThirdPartyProfiles();
         await refreshStats({ force: true });
       } else if (errorEl) {
-        errorEl.textContent = thirdPartyProfileErrorText(result);
+        errorEl.textContent = thirdPartyProfileErrorText(result, adapter);
         errorEl.classList.remove('hidden');
       }
     });
@@ -13908,8 +16839,24 @@ function setupCursorAccountUI() {
       window.tokenMonitor.openExternal(volcenginePlatformUrl());
     });
 
+    document.getElementById('volcengineAgentToggle')?.addEventListener('click', () => {
+      setVolcengineAgentExpanded(document.getElementById('volcengineAgentDetails')?.classList.contains('hidden'));
+    });
+    setVolcengineAgentExpanded(false);
+
+    document.getElementById('volcengineAgentClearButton')?.addEventListener('click', async () => {
+      await saveSettings({
+        volcengineAgentAccessKeyId: '', volcengineAgentSecretAccessKey: '', volcengineAgentRegion: ''
+      });
+      renderExternalProviderStatus('volcengine');
+      await refreshStats({ force: true });
+    });
+
     document.getElementById('volcengineLogoutButton').addEventListener('click', async () => {
-      await saveSettings({ volcengineAccessKeyId: '', volcengineSecretAccessKey: '', volcengineRegion: '' });
+      await saveSettings({
+        volcengineAccessKeyId: '', volcengineSecretAccessKey: '', volcengineRegion: '',
+        volcengineAgentAccessKeyId: '', volcengineAgentSecretAccessKey: '', volcengineAgentRegion: ''
+      });
       clearExternalProviderCheckPending('volcengine');
       clearExternalProviderPendingStatus('volcengine');
       renderExternalProviderStatus('volcengine');
@@ -13924,6 +16871,9 @@ function setupCursorAccountUI() {
       const accessKeyInput = document.getElementById('volcengineAccessKeyInput');
       const secretInput = document.getElementById('volcengineSecretAccessKeyInput');
       const regionInput = document.getElementById('volcengineRegionInput');
+      const agentAccessKeyInput = document.getElementById('volcengineAgentAccessKeyInput');
+      const agentSecretInput = document.getElementById('volcengineAgentSecretAccessKeyInput');
+      const agentRegionInput = document.getElementById('volcengineAgentRegionInput');
       const errorEl = document.getElementById('volcengineErrorMessage');
       errorEl.classList.add('hidden');
       const accessKeyValue = String(accessKeyInput.value || '').trim();
@@ -13933,15 +16883,31 @@ function setupCursorAccountUI() {
         errorEl.classList.remove('hidden');
         return;
       }
+      // Only sent when the user actually filled the override in, so saving the
+      // Coding Plan key again cannot silently wipe a separate Agent account.
+      const agentAccessKeyValue = String(agentAccessKeyInput?.value || '').trim();
+      const agentSecretValue = String(agentSecretInput?.value || '').trim();
+      if (agentAccessKeyValue && !agentSecretValue) {
+        errorEl.textContent = t('settings.volcengine.agentSecretRequired');
+        errorEl.classList.remove('hidden');
+        return;
+      }
       try {
         markExternalProviderCheckPending('volcengine');
         await saveSettings({
           volcengineAccessKeyId: accessKeyInput.value,
           volcengineSecretAccessKey: secretInput.value,
-          volcengineRegion: regionInput.value || 'cn-beijing'
+          volcengineRegion: regionInput.value || 'cn-beijing',
+          ...(agentAccessKeyValue ? {
+            volcengineAgentAccessKeyId: agentAccessKeyValue,
+            volcengineAgentSecretAccessKey: agentSecretValue,
+            volcengineAgentRegion: agentRegionInput?.value || 'cn-beijing'
+          } : {})
         });
         accessKeyInput.value = '';
         secretInput.value = '';
+        if (agentAccessKeyInput) agentAccessKeyInput.value = '';
+        if (agentSecretInput) agentSecretInput.value = '';
         renderExternalProviderStatus('volcengine');
         await refreshStats({ force: true });
         setExternalAccountExpanded('volcengine', !externalProviderAccountLinked('volcengine'));
@@ -14087,6 +17053,159 @@ function setupCursorAccountUI() {
     });
   }
 
+  const traeToggle = document.getElementById('traeSettingsToggle');
+  if (traeToggle) {
+    traeToggle.addEventListener('click', () => setExternalAccountExpanded('trae', !state.traeAccountExpanded));
+    setExternalAccountExpanded('trae', false);
+    renderExternalProviderStatus('trae');
+
+    document.getElementById('traeOpenBrowser').addEventListener('click', () => {
+      window.tokenMonitor.openExternal('https://www.trae.cn');
+    });
+    document.getElementById('traeLogoutButton').addEventListener('click', async () => {
+      await saveSettings({ traeAccessToken: '', traeDeviceId: '' });
+      clearExternalProviderCheckPending('trae');
+      clearExternalProviderPendingStatus('trae');
+      renderExternalProviderStatus('trae');
+      await refreshStats({ force: true });
+    });
+    document.getElementById('traeRefreshButton').addEventListener('click', async () => {
+      await refreshStats({ force: true });
+    });
+    document.getElementById('traeTokenSubmit').addEventListener('click', async () => {
+      const tokenInput = document.getElementById('traeTokenInput');
+      const deviceIdInput = document.getElementById('traeDeviceIdInput');
+      const errorEl = document.getElementById('traeErrorMessage');
+      errorEl.classList.add('hidden');
+      if (!String(tokenInput.value || '').trim()) {
+        errorEl.textContent = t('settings.trae.missingAuthorization');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        markExternalProviderCheckPending('trae');
+        await saveSettings({
+          traeAccessToken: tokenInput.value,
+          traeDeviceId: deviceIdInput.value,
+          limitProviders: limitProviderSelectionIncluding('trae'),
+          limitsEnabled: true
+        });
+        tokenInput.value = '';
+        deviceIdInput.value = '';
+        renderExternalProviderStatus('trae');
+        await refreshStats({ force: true });
+        setExternalAccountExpanded('trae', !externalProviderAccountLinked('trae'));
+        renderExternalProviderStatus('trae');
+      } catch (err) {
+        clearExternalProviderCheckPending('trae');
+        errorEl.textContent = t('settings.trae.saveFailed', { message: err.message });
+        errorEl.classList.remove('hidden');
+      }
+    });
+  }
+
+  const zedToggle = document.getElementById('zedSettingsToggle');
+  if (zedToggle) {
+    zedToggle.addEventListener('click', () => setExternalAccountExpanded('zed', !state.zedAccountExpanded));
+    setExternalAccountExpanded('zed', false);
+    renderExternalProviderStatus('zed');
+
+    document.getElementById('zedOpenBrowser').addEventListener('click', () => {
+      window.tokenMonitor.openExternal(zedPlatformUrl());
+    });
+
+    document.getElementById('zedLogoutButton').addEventListener('click', async () => {
+      await saveSettings({ zedCookie: '' });
+      clearExternalProviderCheckPending('zed');
+      clearExternalProviderPendingStatus('zed');
+      renderExternalProviderStatus('zed');
+      await refreshStats({ force: true });
+    });
+
+    document.getElementById('zedRefreshButton').addEventListener('click', async () => {
+      await refreshStats({ force: true });
+    });
+
+    document.getElementById('zedCookieSubmit').addEventListener('click', async () => {
+      const input = document.getElementById('zedCookieInput');
+      const errorEl = document.getElementById('zedErrorMessage');
+      errorEl.classList.add('hidden');
+      if (!String(input.value || '').trim()) {
+        errorEl.textContent = t('settings.zed.statusNotSet');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        markExternalProviderCheckPending('zed');
+        await saveSettings({
+          zedCookie: input.value,
+          limitProviders: limitProviderSelectionIncluding('zed'),
+          limitsEnabled: true
+        });
+        input.value = '';
+        renderExternalProviderStatus('zed');
+        await refreshStats({ force: true });
+        setExternalAccountExpanded('zed', !externalProviderAccountLinked('zed'));
+        renderExternalProviderStatus('zed');
+      } catch (err) {
+        clearExternalProviderCheckPending('zed');
+        errorEl.textContent = t('settings.zed.saveFailed', { message: err.message });
+        errorEl.classList.remove('hidden');
+      }
+    });
+  }
+
+  const commandcodeToggle = document.getElementById('commandcodeSettingsToggle');
+  if (commandcodeToggle) {
+    commandcodeToggle.addEventListener('click', () => setExternalAccountExpanded('commandcode', !state.commandcodeAccountExpanded));
+    setExternalAccountExpanded('commandcode', false);
+    renderExternalProviderStatus('commandcode');
+
+    document.getElementById('commandcodeOpenBrowser').addEventListener('click', () => {
+      window.tokenMonitor.openExternal(commandcodePlatformUrl());
+    });
+
+    document.getElementById('commandcodeLogoutButton').addEventListener('click', async () => {
+      await saveSettings({ commandcodeCookie: '' });
+      clearExternalProviderCheckPending('commandcode');
+      clearExternalProviderPendingStatus('commandcode');
+      renderExternalProviderStatus('commandcode');
+      await refreshStats({ force: true });
+    });
+
+    document.getElementById('commandcodeRefreshButton').addEventListener('click', async () => {
+      await refreshStats({ force: true });
+    });
+
+    document.getElementById('commandcodeCookieSubmit').addEventListener('click', async () => {
+      const input = document.getElementById('commandcodeCookieInput');
+      const errorEl = document.getElementById('commandcodeErrorMessage');
+      errorEl.classList.add('hidden');
+      if (!String(input.value || '').trim()) {
+        errorEl.textContent = t('settings.commandcode.statusNotSet');
+        errorEl.classList.remove('hidden');
+        return;
+      }
+      try {
+        markExternalProviderCheckPending('commandcode');
+        await saveSettings({
+          commandcodeCookie: input.value,
+          limitProviders: limitProviderSelectionIncluding('commandcode'),
+          limitsEnabled: true
+        });
+        input.value = '';
+        renderExternalProviderStatus('commandcode');
+        await refreshStats({ force: true });
+        setExternalAccountExpanded('commandcode', !externalProviderAccountLinked('commandcode'));
+        renderExternalProviderStatus('commandcode');
+      } catch (err) {
+        clearExternalProviderCheckPending('commandcode');
+        errorEl.textContent = t('settings.commandcode.saveFailed', { message: err.message });
+        errorEl.classList.remove('hidden');
+      }
+    });
+  }
+
   const ollamaToggle = document.getElementById('ollamaSettingsToggle');
   if (ollamaToggle) {
     ollamaToggle.addEventListener('click', () => setExternalAccountExpanded('ollama', !state.ollamaAccountExpanded));
@@ -14217,6 +17336,65 @@ function setupCursorAccountUI() {
         errorEl.textContent = t('settings.kimi.saveFailed', { message: err.message });
         errorEl.classList.remove('hidden');
       }
+    });
+  }
+
+  const antigravityToggle = document.getElementById('antigravitySettingsToggle');
+  if (antigravityToggle && window.tokenMonitor.antigravity) {
+    antigravityToggle.addEventListener('click', () => {
+      setAntigravityAccountExpanded(!state.antigravityAccountExpanded);
+    });
+    setAntigravityAccountExpanded(false);
+    renderAntigravityStatus();
+
+    window.tokenMonitor.antigravity.onAccounts((accounts) => {
+      state.settings.antigravityManagedAccounts = accounts || [];
+      renderAntigravityStatus();
+    });
+    window.tokenMonitor.antigravity.accounts().then((accounts) => {
+      state.settings.antigravityManagedAccounts = accounts || [];
+      renderAntigravityStatus();
+    }).catch(() => {});
+
+    document.getElementById('antigravityAddAccountButton').addEventListener('click', async () => {
+      if (state.antigravitySignInBusy) return;
+      state.antigravitySignInBusy = true;
+      state.antigravityAccountError = '';
+      renderAntigravityStatus();
+      let result;
+      try {
+        result = await window.tokenMonitor.antigravity.addAccount();
+      } catch (error) {
+        result = { ok: false, error: error.message };
+      } finally {
+        state.antigravitySignInBusy = false;
+      }
+      if (!result?.ok && result?.errorCode !== 'cancelled') {
+        const errorKeys = {
+          OAUTH_CLIENT_NOT_FOUND: 'settings.antigravity.oauthClientMissing',
+          TIMEOUT: 'settings.antigravity.loginTimeout',
+          STATE_MISMATCH: 'settings.antigravity.loginStateMismatch',
+          credentialStorageUnavailable: 'settings.antigravity.credentialStorageUnavailable',
+          loginInProgress: 'settings.antigravity.loginInProgress'
+        };
+        state.antigravityAccountError = errorKeys[result?.errorCode]
+          ? t(errorKeys[result.errorCode])
+          : result?.error || t('settings.antigravity.loginFailed');
+      } else if (result?.ok) {
+        state.antigravityAccountError = '';
+        state.settings.antigravityManagedAccounts = result.accounts || [];
+        // Match the Codex account flow: the account is connected as soon as its
+        // credential is stored. Quota onboarding and refresh continue in the
+        // background instead of leaving the login button visually busy.
+        refreshStats({ force: true }).catch(() => {});
+      }
+      renderAntigravityStatus();
+    });
+
+    document.getElementById('antigravityCancelLoginButton').addEventListener('click', async () => {
+      await window.tokenMonitor.antigravity.cancelLogin();
+      state.antigravitySignInBusy = false;
+      renderAntigravityStatus();
     });
   }
 
@@ -14448,6 +17626,9 @@ function initSettingsAnimationWrappers() {
     '#zaiteamManualPanel',
     '#volcengineManualPanel',
     '#qoderManualPanel',
+    '#traeManualPanel',
+    '#zedManualPanel',
+    '#commandcodeManualPanel',
     '#kimiManualPanel',
     '#ollamaManualPanel'
   ].join(', ');

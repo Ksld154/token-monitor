@@ -8,9 +8,10 @@
     : (typeof window !== 'undefined' ? window.TokenMonitorLimitBalanceDisplay : null);
   const windowPriority = new Map([
     ['session', 0],
-    ['weekly', 1],
-    ['billing', 2],
-    ['monthly', 3]
+    ['daily', 1],
+    ['weekly', 2],
+    ['billing', 3],
+    ['monthly', 4]
   ]);
 
   function finiteNumber(value) {
@@ -127,6 +128,7 @@
         return {
           key: account.key || String(index),
           providerId: account.providerId || '',
+          iconId: account.iconId || '',
           name: account.name || '',
           color: account.color || '',
           lowestRemaining: Math.min(...windows.map((window) => window.remainingPercent ?? 100)),
@@ -143,7 +145,9 @@
   }
 
   function homeModelRows(rows, totalTokens, limit = 5) {
-    const visible = (rows || []).slice(0, Math.max(0, Number(limit) || 0));
+    const visible = (rows || [])
+      .filter((row) => Math.max(0, Number(row?.value || 0)) > 0)
+      .slice(0, Math.max(0, Number(limit) || 0));
     const suppliedTotal = finiteNumber(totalTokens);
     const total = suppliedTotal != null && suppliedTotal > 0
       ? suppliedTotal
@@ -222,7 +226,9 @@
     colors = {},
     limit = 3,
     sort = 'remaining',
-    accountName
+    accountName,
+    accountColor,
+    accountIcon
   } = {}) {
     const enabled = new Set((enabledProviderIds || []).map((id) => String(id || '').trim().toLowerCase()).filter(Boolean));
     const hidden = new Set((hiddenProviderIds || []).map((id) => String(id || '').trim().toLowerCase()).filter(Boolean));
@@ -237,7 +243,10 @@
           key: `${id}:${index}`,
           providerId: id,
           name: typeof accountName === 'function' ? accountName(provider, index, providerEntries) : label,
-          color: colors[id] || colors.default || '',
+          color: typeof accountColor === 'function'
+            ? accountColor(provider, id, colors[id] || colors.default || '')
+            : (colors[id] || colors.default || ''),
+          iconId: typeof accountIcon === 'function' ? accountIcon(provider, id) : id,
           windows: provider.windows || [],
           balance: provider.balance || null
         });
@@ -257,6 +266,13 @@
           visible[visible.length - 1]?.date || ''
         ];
     return { peak, dates };
+  }
+
+  function longRangePeakDayTokens({ historySummary, daily } = {}) {
+    const summaryPeak = finiteNumber(historySummary?.peakDayTokens);
+    const dailyPeak = (Array.isArray(daily) ? daily : [])
+      .reduce((peak, row) => Math.max(peak, finiteNumber(row?.tokens) || 0), 0);
+    return Math.max(0, summaryPeak || 0, dailyPeak);
   }
 
   function homeActivityHeatmapLayout() {
@@ -296,6 +312,41 @@
     }
     rows[idx] = Object.assign({}, rows[idx], { tokens, cost });
     return rows;
+  }
+
+  // The standalone Trends page keeps active time and peak aligned with the selected
+  // period. Home uses longRangePeakDayTokens instead, matching its long-range chart;
+  // active days and current streak remain the retained-history values users know.
+  function activityStatsForPeriod({ period, fixedSnapshot, daily, historySummary, todayKey } = {}) {
+    const history = historySummary && typeof historySummary === 'object' ? historySummary : {};
+    if (fixedSnapshot?.status === 'ready') {
+      return {
+        activeDays: finiteNumber(history.activeDays) || 0,
+        currentStreak: finiteNumber(history.currentStreak) || 0,
+        activeTimeMs: finiteNumber(fixedSnapshot.summary?.activeTimeMs) || 0,
+        peakDayTokens: finiteNumber(fixedSnapshot.summary?.peakDayTokens) || 0
+      };
+    }
+    if (period === 'allTime') {
+      return {
+        activeDays: finiteNumber(history.activeDays) || 0,
+        currentStreak: finiteNumber(history.currentStreak) || 0,
+        activeTimeMs: finiteNumber(history.activeTimeMs) || 0,
+        peakDayTokens: finiteNumber(history.peakDayTokens) || 0
+      };
+    }
+    const day = String(todayKey || '').slice(0, 10);
+    const month = day.slice(0, 7);
+    const selected = (Array.isArray(daily) ? daily : []).filter((row) => {
+      const key = String(row?.date || '').slice(0, 10);
+      return period === 'today' ? key === day : key.slice(0, 7) === month;
+    });
+    return {
+      activeDays: finiteNumber(history.activeDays) || 0,
+      currentStreak: finiteNumber(history.currentStreak) || 0,
+      activeTimeMs: selected.reduce((sum, row) => sum + (finiteNumber(row?.activeTimeMs) || 0), 0),
+      peakDayTokens: selected.reduce((peak, row) => Math.max(peak, finiteNumber(row?.tokens) || 0), 0)
+    };
   }
 
   // Stable signature of the preview's daily tail. Two previews with the same key
@@ -405,9 +456,11 @@
     homeLimitAccounts,
     homeLimitAccountsForProviders,
     homeModelRows,
+    longRangePeakDayTokens,
     homeToolRows,
     homeDeviceRows,
     homeTrendSummary,
+    activityStatsForPeriod,
     pickHomeHistory,
     patchDailyToday,
     historyPreviewKey,
