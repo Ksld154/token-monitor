@@ -9,6 +9,7 @@ const {
   extractUsageFromTokscale,
   mergeDeviceRecord,
   mergePeriods,
+  normalizeClientName,
   UNATTRIBUTED_USAGE_CLIENT
 } = require('../../src/shared/usage');
 
@@ -395,12 +396,22 @@ test('mergeDeviceRecord preserves usage for clients omitted by the active tracke
     trackedClients: ['codex', 'hermes'],
     updatedAt: '2026-05-30T12:00:00.000Z',
     today: {
+      capabilities: { tokenComponents: true },
       totalTokens: 150,
       costUsd: 1.5,
+      cacheReadTokens: 80,
+      cacheWriteTokens: 15,
+      outputTokens: 30,
       clients: { hermes: 100, codex: 50 },
       clientCosts: { hermes: 1.25, codex: 0.25 },
+      clientCacheReads: { hermes: 60, codex: 20 },
+      clientCacheWrites: { hermes: 10, codex: 5 },
+      clientOutputs: { hermes: 20, codex: 10 },
       models: { 'claude-3-5-sonnet': 100, 'gpt-5': 50 },
       modelCosts: { 'claude-3-5-sonnet': 1.25, 'gpt-5': 0.25 },
+      modelCacheReads: { 'claude-3-5-sonnet': 60, 'gpt-5': 20 },
+      modelCacheWrites: { 'claude-3-5-sonnet': 10, 'gpt-5': 5 },
+      modelOutputs: { 'claude-3-5-sonnet': 20, 'gpt-5': 10 },
       clientModels: { hermes: { 'claude-3-5-sonnet': 100 }, codex: { 'gpt-5': 50 } },
       clientModelCosts: { hermes: { 'claude-3-5-sonnet': 1.25 }, codex: { 'gpt-5': 0.25 } },
       sessions: {
@@ -431,12 +442,22 @@ test('mergeDeviceRecord preserves usage for clients omitted by the active tracke
     trackedClients: ['codex'],
     updatedAt: '2026-05-30T12:01:00.000Z',
     today: {
+      capabilities: { tokenComponents: true },
       totalTokens: 75,
       costUsd: 0.5,
+      cacheReadTokens: 30,
+      cacheWriteTokens: 5,
+      outputTokens: 15,
       clients: { codex: 75 },
       clientCosts: { codex: 0.5 },
+      clientCacheReads: { codex: 30 },
+      clientCacheWrites: { codex: 5 },
+      clientOutputs: { codex: 15 },
       models: { 'gpt-5': 75 },
       modelCosts: { 'gpt-5': 0.5 },
+      modelCacheReads: { 'gpt-5': 30 },
+      modelCacheWrites: { 'gpt-5': 5 },
+      modelOutputs: { 'gpt-5': 15 },
       clientModels: { codex: { 'gpt-5': 75 } },
       clientModelCosts: { codex: { 'gpt-5': 0.5 } },
       sessions: {
@@ -461,6 +482,11 @@ test('mergeDeviceRecord preserves usage for clients omitted by the active tracke
   assert.equal(merged.periods.today.models['gpt-5'], 75);
   assert.equal(merged.periods.today.models['claude-3-5-sonnet'], 100);
   assert.equal(merged.periods.today.clientModels.hermes['claude-3-5-sonnet'], 100);
+  assert.equal(merged.periods.today.capabilities.tokenComponents, true);
+  assert.equal(merged.periods.today.cacheReadTokens, 90);
+  assert.equal(merged.periods.today.clientCacheReads.hermes, 60);
+  assert.equal(merged.periods.today.modelOutputs['claude-3-5-sonnet'], 20);
+  assert.equal(merged.periods.today.unclassifiedTokens, 0);
   assert.equal(merged.periods.today.sessions['hermes:h1'].totalTokens, 100);
   assert.equal(merged.periods.today.sessions['codex:c1'], undefined);
   assert.deepEqual(JSON.parse(JSON.stringify(merged.periods.today.projects['shared app'])), {
@@ -788,15 +814,30 @@ test('extractUsageFromTokscale normalizes CodeBuddy and WorkBuddy client ids', (
   assert.equal(period.clients.workbuddy, 12);
 });
 
-test('normalizeClientName keeps kilo distinct from kilocode and maps Oh My Pi to pi', () => {
+test('extractUsageFromTokscale keeps the canonical Command Code client id', () => {
+  const period = extractUsageFromTokscale([
+    { client: 'Command Code', model: 'deepseek/deepseek-v4-flash', totalTokens: 19 }
+  ]);
+
+  assert.equal(period.clients.commandcode, 19);
+});
+
+test('normalizeClientName keeps kilo distinct from kilocode and maps both Oh My Pi ids to pi', () => {
   const period = extractUsageFromTokscale([
     { client: 'kilo', model: 'x', totalTokens: 5 },
-    { client: 'Oh My Pi', model: 'x', totalTokens: 7 }
+    { client: 'Oh My Pi', model: 'x', totalTokens: 7 },
+    { client: 'omp', model: 'x', totalTokens: 11 }
   ]);
 
   assert.equal(period.clients.kilo, 5);
-  assert.equal(period.clients.pi, 7);
+  assert.equal(period.clients.pi, 18);
   assert.ok(!('kilocode' in period.clients));
+});
+
+test('normalizeClientName keeps Qoder CN distinct from international Qoder', () => {
+  assert.equal(normalizeClientName('Qoder CN'), 'qodercn');
+  assert.equal(normalizeClientName('qoder-cn'), 'qodercn');
+  assert.equal(normalizeClientName('Qoder'), 'qoder');
 });
 
 test('extractUsageFromTokscale keeps model usage grouped by client', () => {
@@ -838,7 +879,7 @@ test('extractUsageBundleFromTokscale isolates rows without a client for safe fal
   assert.equal(bundle.period.totalTokens, 7);
 });
 
-test('extractUsageFromTokscale keeps session usage grouped by client and model', () => {
+test('extractUsageFromTokscale folds disjoint Codex reasoning into the public output bucket', () => {
   const period = extractUsageFromTokscale({
     groupBy: 'client,session,model',
     entries: [
@@ -878,20 +919,41 @@ test('extractUsageFromTokscale keeps session usage grouped by client and model',
   });
 
   const codex = period.sessions['codex:rollout-1'];
-  // reasoning (2) is a subset of output (5), so it is NOT added to the total:
-  // entry 1 = 10 + 5 + 100 = 115, entry 2 = 2 + 3 = 5 → 120 (reasoning still tracked separately).
-  assert.equal(codex.totalTokens, 120);
+  // Tokscale's latest JSON makes output (5) and reasoning (2) disjoint. Token
+  // Monitor's public wire keeps output reasoning-inclusive, so entry 1 is
+  // 10 + (5 + 2) + 100 = 117 and entry 2 is 2 + 3 = 5.
+  assert.equal(codex.totalTokens, 122);
   assert.equal(codex.costUsd, 0.3);
   assert.equal(codex.messageCount, 4);
   assert.equal(codex.inputTokens, 12);
-  assert.equal(codex.outputTokens, 8);
+  assert.equal(codex.outputTokens, 10);
   assert.equal(codex.cacheReadTokens, 100);
   assert.equal(codex.reasoningTokens, 2);
   assert.equal(codex.lastUsedAt, '2026-05-30T04:00:00.000Z');
-  assert.equal(codex.models['gpt-5'], 115);
+  assert.equal(codex.models['gpt-5'], 117);
   assert.equal(codex.models['gpt-4o'], 5);
-  assert.equal(codex.providers.openai, 120);
+  assert.equal(codex.providers.openai, 122);
   assert.equal(period.sessions['cursor:cursor-active'].models['cursor-auto'], 3);
+});
+
+test('extractUsageFromTokscale folds disjoint DSH reasoning into totals and output', () => {
+  const period = extractUsageFromTokscale({
+    entries: [{
+      client: 'dsh',
+      sessionId: 'session-reasoning',
+      model: 'deepseek-reasoner',
+      input: 2885,
+      output: 2,
+      reasoning: 23
+    }]
+  });
+
+  assert.equal(period.totalTokens, 2910);
+  assert.equal(period.outputTokens, 25);
+  assert.equal(period.clientOutputs.dsh, 25);
+  assert.equal(period.sessions['dsh:session-reasoning'].totalTokens, 2910);
+  assert.equal(period.sessions['dsh:session-reasoning'].outputTokens, 25);
+  assert.equal(period.sessions['dsh:session-reasoning'].reasoningTokens, 23);
 });
 
 test('aggregateDevices combines session usage across devices', () => {
@@ -974,16 +1036,23 @@ test('normalizeDeviceRecord carries a history field when present', () => {
   assert.equal(rec.history.daily[0].tokens, 5);
   const bare = normalizeDeviceRecord({ deviceId: 'm1' });
   assert.equal('history' in bare, false);
+  const unavailable = normalizeDeviceRecord({ deviceId: 'm1', history: null });
+  assert.equal(unavailable.history, null);
+  const capable = normalizeDeviceRecord({ deviceId: 'm1', historyAvailable: true });
+  assert.equal(capable.historyAvailable, true);
+  assert.equal(Object.hasOwn(normalizeDeviceRecord({ deviceId: 'm1' }), 'historyAvailable'), false);
 });
 
 test('mergeDeviceRecord preserves prior history when the incoming post omits it', () => {
   const existing = normalizeDeviceRecord({
     deviceId: 'm1',
     today: { totalTokens: 1, costUsd: 0, clients: {}, clientCosts: {} },
+    historyAvailable: true,
     history: { daily: [{ date: '2026-06-07', tokens: 5 }], monthly: [], summary: { totalTokens: 5 } }
   });
   const merged = mergeDeviceRecord(existing, { deviceId: 'm1', limitsOnly: true });
   assert.equal(merged.history.daily[0].tokens, 5);
+  assert.equal(merged.historyAvailable, true);
 });
 
 test('mergeDeviceRecord clears prior history when incoming history is explicitly null', () => {
@@ -993,7 +1062,7 @@ test('mergeDeviceRecord clears prior history when incoming history is explicitly
     history: { daily: [{ date: '2026-06-07', tokens: 5 }], monthly: [], summary: { totalTokens: 5 } }
   });
   const merged = mergeDeviceRecord(existing, { deviceId: 'm1', history: null });
-  assert.deepEqual(merged.history, { daily: [], monthly: [], summary: {} });
+  assert.equal(merged.history, null);
 });
 
 test('aggregateHistory retains stored history from stale devices', () => {
@@ -1073,6 +1142,7 @@ function staleSnapshotDevice(extra = {}) {
     updatedAt: '2026-06-21T05:00:00.000Z',
     receivedAt: '2026-06-21T05:00:00.000Z',
     periodWindows: {
+      timeZone: 'Asia/Hong_Kong',
       today: { key: '2026-06-21', endsAt: '2026-06-22T00:00:00.000Z' },
       month: { key: '2026-06', endsAt: '2026-07-01T00:00:00.000Z' }
     },
@@ -1088,6 +1158,13 @@ test('aggregateDevices drops today usage once a device today window has ended', 
   assert.equal(aggregate.periods.today.totalTokens, 0);
   assert.equal(aggregate.periods.today.clients.codex, undefined);
   assert.deepEqual(aggregate.devices[0].periodWindows, staleSnapshotDevice().periodWindows);
+});
+
+test('aggregateDevices omits an invalid producer timezone', () => {
+  const device = staleSnapshotDevice();
+  device.periodWindows.timeZone = 'Not/A_TimeZone';
+  const aggregate = aggregateDevices([device], 10 * 60 * 1000, Date.parse('2026-06-21T12:00:00.000Z'));
+  assert.equal(aggregate.devices[0].periodWindows.timeZone, undefined);
 });
 
 test('aggregateDevices keeps allTime from a device whose today window has ended', () => {

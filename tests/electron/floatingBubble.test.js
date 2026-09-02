@@ -78,6 +78,10 @@ test('normalizeInitialRendererViewState restores a persisted last-used view', ()
     { period: 'month', breakdown: 'trends' }
   );
   assert.deepEqual(
+    normalizeInitialRendererViewState({ period: 'last7', breakdown: 'model' }),
+    { period: 'last7', breakdown: 'model' }
+  );
+  assert.deepEqual(
     normalizeInitialRendererViewState({ period: 'allTime', breakdown: 'project' }),
     { period: 'allTime', breakdown: 'project' }
   );
@@ -402,6 +406,31 @@ test('glass surfaces keep the shared tint and blur without decorative chrome', (
   assert.match(css, /html\.floating-bubble-collapsed-left body \.shell,\s*html\.floating-bubble-collapsed-right body \.shell/);
   assert.match(css, /html\.floating-bubble-collapsed-left body \.floating-bubble-tab/);
   assert.match(css, /html\.floating-bubble-collapsed-left,\s*body\.floating-bubble-collapsed-left\s*\{[\s\S]*border-radius:\s*var\(--floating-bubble-radius\);/);
+});
+
+test('generated floating bubble images use a device-scale-aware bitmap', () => {
+  const css = fs.readFileSync(stylesPath, 'utf8');
+  const app = fs.readFileSync(appPath, 'utf8');
+  const imageBlock = cssBlock(css, '\\.floating-bubble-tab span\\.bars img');
+  const renderStart = app.indexOf('function renderFloatingBubbleContent()');
+  const renderEnd = app.indexOf('function reportFloatingBubbleSize()', renderStart);
+  const renderBody = app.slice(renderStart, renderEnd);
+  const previewStart = app.indexOf('function trayComposerPreview(surface)');
+  const previewEnd = app.indexOf('function activateTrayComposer(surface)', previewStart);
+  const previewBody = app.slice(previewStart, previewEnd);
+
+  assert.match(imageBlock, /height:\s*24px;/);
+  assert.match(app, /const BUBBLE_GENERATED_IMAGE_CSS_HEIGHT = 24;/);
+  assert.match(
+    app,
+    /floatingBubbleBitmapHeight\(\s*window\.devicePixelRatio,\s*BUBBLE_GENERATED_IMAGE_CSS_HEIGHT\s*\)/
+  );
+  assert.match(renderBody, /const bitmapHeight = currentFloatingBubbleBitmapHeight\(\);/);
+  assert.match(renderBody, /trayDataUrlForMode\(mode, bitmapHeight,/);
+  assert.doesNotMatch(renderBody, /trayDataUrlForMode\(mode, 44,/);
+  assert.match(previewBody, /trayDataUrlForMode\(mode, currentFloatingBubbleBitmapHeight\(\),/);
+  assert.match(app, /watchDeviceScaleChanges\(\{[\s\S]*onChange:\s*refreshFloatingBubbleBitmapForDeviceScale/);
+  assert.match(app, /window\.addEventListener\('resize',[\s\S]*refreshFloatingBubbleBitmapForDeviceScale\(\);/);
 });
 
 test('floatingBubbleCollapsePlan honors a custom handle size', () => {

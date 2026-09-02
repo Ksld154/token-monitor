@@ -41,16 +41,20 @@ test('default provider order follows tracked tools, named services, then third-p
     'kimi',
     'grok',
     'copilot',
+    'zed',
+    'commandcode',
     'mimo',
     'zai',
     'zaiteam',
     'kiro',
+    'workbuddy',
+    'qoder',
     'deepseek',
     'openrouter',
     'minimax',
     'volcengine',
-    'qoder',
     'ollama',
+    'trae',
     'thirdparty'
   ]);
 });

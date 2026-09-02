@@ -16,6 +16,55 @@
     return Math.min(max, Math.max(min, value));
   }
 
+  function floatingBubbleBitmapHeight(devicePixelRatio, cssHeight = 24) {
+    const ratio = Number(devicePixelRatio);
+    const resolvedRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+    const height = Number(cssHeight);
+    const resolvedHeight = Number.isFinite(height) && height > 0 ? height : 24;
+    return Math.max(1, Math.round(resolvedHeight * resolvedRatio));
+  }
+
+  function watchDeviceScaleChanges({ matchMedia, getDevicePixelRatio, onChange } = {}) {
+    if (typeof matchMedia !== 'function') return () => {};
+    const readRatio = typeof getDevicePixelRatio === 'function' ? getDevicePixelRatio : () => 1;
+    const notify = typeof onChange === 'function' ? onChange : () => {};
+    let active = true;
+    let mediaQuery = null;
+
+    function removeListener() {
+      if (typeof mediaQuery?.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleChange);
+      } else {
+        mediaQuery?.removeListener?.(handleChange);
+      }
+    }
+
+    function arm() {
+      if (!active) return;
+      removeListener();
+      const ratio = Number(readRatio());
+      const resolvedRatio = Number.isFinite(ratio) && ratio > 0 ? ratio : 1;
+      mediaQuery = matchMedia(`(resolution: ${resolvedRatio}dppx)`);
+      if (typeof mediaQuery?.addEventListener === 'function') {
+        mediaQuery.addEventListener('change', handleChange);
+      } else {
+        mediaQuery?.addListener?.(handleChange);
+      }
+    }
+
+    function handleChange() {
+      arm();
+      notify();
+    }
+
+    arm();
+    return () => {
+      active = false;
+      removeListener();
+      mediaQuery = null;
+    };
+  }
+
   function button(className, text, onClick) {
     const el = document.createElement('button');
     el.type = 'button';
@@ -49,6 +98,18 @@
   function periodItemPatch(item, rowIndex, period) {
     if (Array.isArray(item.rows)) return sourcePatch(item, rowIndex, { period });
     return { ...item, period };
+  }
+
+  function costDisplayPatch(item, rowIndex, patch) {
+    return Array.isArray(item?.rows)
+      ? sourcePatch(item, rowIndex, patch)
+      : { ...item, ...patch };
+  }
+
+  function usageScopePatch(item, rowIndex, usageScope) {
+    return Array.isArray(item?.rows)
+      ? sourcePatch(item, rowIndex, { usageScope })
+      : { ...item, usageScope };
   }
 
   function accountModeSourcePatch(source, accounts, accountMode) {
@@ -88,6 +149,16 @@
       layout: layoutApi.moveTrayLayoutItem(current, itemId, nextIndex),
       moved: true
     };
+  }
+
+  function handlePickerDocumentScroll(picker, eventTarget, actions = {}) {
+    if (picker?.menu?.contains?.(eventTarget)) return 'ignore';
+    if (!picker?.owner?.isConnected || !picker?.trigger?.isConnected) {
+      actions.close?.();
+      return 'close';
+    }
+    actions.reposition?.();
+    return 'reposition';
   }
 
   function syncTrayComposerSurfaces(surfaces, composers, createComposer) {
@@ -435,8 +506,14 @@
         closePickerMenu();
       };
       const onDocumentScroll = (event) => {
-        if (menu.contains(event.target)) return;
-        closePickerMenu({ restoreFocus: false });
+        // Stats updates can adjust the settings page's scroll position while a
+        // picker is open. Keep the in-progress control stable and follow its
+        // connected trigger instead of treating that layout correction as an
+        // outside dismissal.
+        handlePickerDocumentScroll(activePicker, event.target, {
+          close: () => closePickerMenu({ restoreFocus: false }),
+          reposition: positionPickerMenu
+        });
       };
       activePicker = {
         owner,
@@ -613,6 +690,45 @@
       ];
     }
 
+    function costDisplayEditors(item, rowIndex = 0) {
+      const source = Array.isArray(item.rows) ? sourceForItem(item, rowIndex) : item;
+      return [
+        picker(
+          l('trayComposer.costFormat', 'Cost format'),
+          [
+            { value: 'compact', label: l('trayComposer.costFormat.compact', 'Compact') },
+            { value: 'full', label: l('trayComposer.costFormat.full', 'Full number') }
+          ],
+          source.costFormat,
+          (costFormat) => updateItem(item, costDisplayPatch(item, rowIndex, { costFormat }))
+        ),
+        picker(
+          l('trayComposer.costDecimals', 'Decimal places'),
+          [
+            { value: 'auto', label: l('trayComposer.costDecimals.auto', 'Automatic') },
+            ...[0, 1, 2, 3, 4].map((value) => ({ value, label: String(value) }))
+          ],
+          source.costDecimals,
+          (costDecimals) => updateItem(item, costDisplayPatch(item, rowIndex, {
+            costDecimals: costDecimals === 'auto' ? 'auto' : Number(costDecimals)
+          }))
+        )
+      ];
+    }
+
+    function usageScopeEditor(item, rowIndex = 0) {
+      const source = Array.isArray(item.rows) ? sourceForItem(item, rowIndex) : item;
+      return picker(
+        l('trayComposer.usageScope', 'Usage source'),
+        [
+          { value: 'all', label: l('trayComposer.usageScope.all', 'All AI tools') },
+          { value: 'recent', label: l('trayComposer.usageScope.recent', 'Most recently active tool') }
+        ],
+        source.usageScope,
+        (usageScope) => updateItem(item, usageScopePatch(item, rowIndex, usageScope))
+      );
+    }
+
     function sourceEditor(item, rowIndex, title = '', options = {}) {
       const source = sourceForItem(item, rowIndex);
       const section = document.createElement('section');
@@ -635,12 +751,14 @@
 
       if (metric === 'tokens' || metric === 'cost') {
         const currentPeriod = Array.isArray(item.rows) ? source.period : item.period;
+        section.append(usageScopeEditor(item, rowIndex));
         section.append(picker(
           l('trayComposer.period', 'Period'),
           periodChoices(),
           currentPeriod,
           (period) => updateItem(item, periodItemPatch(item, rowIndex, period))
         ));
+        if (metric === 'cost') section.append(...costDisplayEditors(item, rowIndex));
         return section;
       }
 
@@ -671,6 +789,10 @@
           {
             value: 'lowestLimit',
             label: l('trayComposer.icon.auto.lowestLimit', 'Lowest remaining quota')
+          },
+          {
+            value: 'recent',
+            label: l('trayComposer.icon.auto.recent', 'Most recently active tool')
           },
           {
             value: 'tokens',
@@ -739,6 +861,7 @@
         ));
       }
 
+      let selectedWindow = null;
       if (options.includeWindow !== false) {
         const windows = windowChoices(source);
         section.append(picker(
@@ -747,9 +870,32 @@
           source.window,
           (window) => updateItem(item, sourcePatch(item, rowIndex, { window }))
         ));
+
+        selectedWindow = windows.find((choice) => choice.value === source.window) || windows[0];
+        if (options.includeCreditsDisplay === true && selectedWindow?.credits) {
+          section.append(picker(
+            l('trayComposer.creditsDisplay', 'Balance display'),
+            [
+              { value: 'balance', label: l('trayComposer.creditsDisplay.balance', 'Balance') },
+              {
+                value: 'percent',
+                label: l('trayComposer.creditsDisplay.percent', 'Meter percentage'),
+                detail: l(
+                  'trayComposer.creditsDisplay.percentDetail',
+                  'Uses the same display value as the balance meter.'
+                )
+              }
+            ],
+            source.creditsDisplay === 'percent' ? 'percent' : 'balance',
+            (creditsDisplay) => updateItem(item, sourcePatch(item, rowIndex, { creditsDisplay }))
+          ));
+        }
       }
 
-      if (options.includeValue !== false) {
+      const balanceAmountSelected = options.includeCreditsDisplay === true
+        && selectedWindow?.credits
+        && source.creditsDisplay !== 'percent';
+      if (options.includeValue !== false && !balanceAmountSelected) {
         const values = [
           { value: 'remaining', label: l('trayComposer.value.remaining', 'Remaining') },
           { value: 'used', label: l('trayComposer.value.used', 'Used') }
@@ -925,6 +1071,9 @@
                 : l('trayComposer.valueNumber', `Value ${index + 1}`, { number: index + 1 }),
             {
               includeMetric: item.metric === 'mixed',
+              includeCreditsDisplay: item.metric === 'percent'
+                || sourceForItem(item, index).metric === 'percent'
+                || sourceForItem(item, index).metric === 'percentReset',
               includeValue: item.type === 'bars'
                 || item.metric === 'percent'
                 || sourceForItem(item, index).metric === 'percent'
@@ -976,14 +1125,17 @@
         ));
         popover.append(fontStyleEditor(item));
         if (item.metric === 'tokens' || item.metric === 'cost') {
+          popover.append(usageScopeEditor(item));
           popover.append(picker(
             l('trayComposer.period', 'Period'),
             periodChoices(),
             item.period,
             (period) => updateItem(item, { ...item, period })
           ));
+          if (item.metric === 'cost') popover.append(...costDisplayEditors(item));
         } else {
           popover.append(sourceEditor(item, 0, '', {
+            includeCreditsDisplay: item.metric === 'percent' || item.metric === 'percentReset',
             includeValue: item.metric === 'percent' || item.metric === 'percentReset'
           }));
         }
@@ -1232,10 +1384,15 @@
 
   return {
     accountModeSourcePatch,
+    costDisplayPatch,
     createTrayComposer,
     duplicateTrayLayoutItem,
+    floatingBubbleBitmapHeight,
+    handlePickerDocumentScroll,
     moveTrayLayoutItemByKey,
     periodItemPatch,
-    syncTrayComposerSurfaces
+    syncTrayComposerSurfaces,
+    usageScopePatch,
+    watchDeviceScaleChanges
   };
 });

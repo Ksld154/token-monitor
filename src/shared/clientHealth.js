@@ -25,6 +25,9 @@
 // Node-builtin-free: this module is vendored into worker/src/shared/ by
 // `npm run sync:worker`.
 
+const { REASONIX_SOURCE_CHECK_ID } = require('./reasonixPaths');
+const { DSH_SOURCE_CHECK_ID } = require('./dshPaths');
+
 const CLIENT_HEALTH_VERSION = 1;
 
 // healthy      — usage was observed for this client
@@ -52,6 +55,112 @@ const CLIENT_COLLECTION_STATES = Object.freeze([
   'direct', 'idle', 'pending', 'ok', 'failed', 'unknown'
 ]);
 
+// Additional evidence for a failed self-sync. These values describe the stage
+// that failed, not the subprocess's message; the latter may contain paths and
+// is never allowed onto the device record.
+const CLIENT_SYNC_FAILURE_STAGES = Object.freeze(['spawn', 'timeout', 'process-exit', 'unknown']);
+const CLIENT_SYNC_FAILURE_STAGE_SET = new Set(CLIENT_SYNC_FAILURE_STAGES);
+const MAX_SYNC_EXIT_CODE = 2 ** 31 - 1;
+const CLIENT_SYNC_DETAIL_CODES = Object.freeze([
+  'language-server-not-found',
+  'rpc-failed',
+  'permission-denied',
+  'cache-write-failed',
+  'invalid-response',
+  'network-timeout',
+  'network-failed',
+  'authentication-failed',
+  'sync-lock-present',
+  'unknown'
+]);
+const CLIENT_SYNC_DETAIL_CODE_SET = new Set(CLIENT_SYNC_DETAIL_CODES);
+const MAX_SYNC_DETAIL_INPUT_LENGTH = 8 * 1024;
+
+function normalizeClientSyncFailureStage(value) {
+  const stage = String(value ?? '').trim().toLowerCase();
+  if (!stage) return null;
+  return CLIENT_SYNC_FAILURE_STAGE_SET.has(stage) ? stage : 'unknown';
+}
+
+function normalizeClientSyncExitCode(value) {
+  if (typeof value !== 'number' && typeof value !== 'string') return null;
+  const raw = String(value).trim();
+  if (!/^\d+$/.test(raw)) return null;
+  const code = Number(raw);
+  return Number.isSafeInteger(code) && code >= 0 && code <= MAX_SYNC_EXIT_CODE ? code : null;
+}
+
+function normalizeClientSyncDetailCode(value) {
+  const code = String(value ?? '').trim().toLowerCase();
+  if (!code) return null;
+  return CLIENT_SYNC_DETAIL_CODE_SET.has(code) ? code : 'unknown';
+}
+
+function boundedSyncDetailText(value) {
+  const raw = String(value ?? '');
+  if (raw.length <= MAX_SYNC_DETAIL_INPUT_LENGTH) return raw;
+  let bounded = '';
+  let codePoints = 0;
+  for (const character of raw) {
+    if (codePoints >= MAX_SYNC_DETAIL_INPUT_LENGTH) break;
+    bounded += character;
+    codePoints += 1;
+  }
+  return bounded;
+}
+
+// Classify only high-confidence, stable substrings from the local sync error.
+// The input is used inside the process and the return value is the only part
+// that may cross the client-health or diagnostic boundaries.
+function classifyClientSyncDetailCode({ client = '', text = '' } = {}) {
+  const message = boundedSyncDetailText(text).trim().toLowerCase();
+  if (!message) return null;
+
+  if (/permission denied|access is denied|operation not permitted|\beacces\b|\beperm\b/.test(message)) {
+    return 'permission-denied';
+  }
+  if (
+    /no space left on device|read-only file system/.test(message)
+    || /failed to (?:create|persist|write|save).*(?:cache|artifact|manifest)/.test(message)
+    || /(?:cache|artifact|manifest).*(?:write|persist|save).*(?:failed|error)/.test(message)
+  ) {
+    return 'cache-write-failed';
+  }
+  if (/session (?:token )?(?:expired|invalid)|invalid (?:api )?token|not authenticated|re-authenticate|unauthorized|forbidden|status\s+(?:401|403)\b/.test(message)) {
+    return 'authentication-failed';
+  }
+  const hasNetworkTimeoutTerm = /\b(?:etimedout|network|https?|request|connect(?:ion)?|socket|tcp|tls|dns)\b/.test(message);
+  const hasTimeoutTerm = /\b(?:etimedout|timed out|timeout|deadline exceeded|deadline has elapsed)\b/.test(message);
+  if (hasNetworkTimeoutTerm && hasTimeoutTerm) {
+    return 'network-timeout';
+  }
+  if (/malformed.*response|invalid response|expected csv format|failed to parse response|invalid json/.test(message)) {
+    return 'invalid-response';
+  }
+  if (
+    client === 'antigravity'
+    && /cannot discover .*language servers?|language server.*(?:not found|unavailable)|no .*language servers?/.test(message)
+  ) {
+    return 'language-server-not-found';
+  }
+  if (
+    client === 'antigravity'
+    && (/\brpc\b.*(?:fail|error)|(?:fail|error).*\brpc\b|failed to connect to antigravity rpc/.test(message))
+  ) {
+    return 'rpc-failed';
+  }
+  if (
+    client === 'antigravity'
+    && /antigravity sync lock at .* already exists/.test(message)
+  ) {
+    return 'sync-lock-present';
+  }
+  if (/failed to connect|connection refused|connection reset|could not resolve|\bdns\b|\bnetwork\b/.test(message)) {
+    return 'network-failed';
+  }
+  return null;
+}
+
 // Stable ids for the source roots the collector probes. One id can stand for
 // several paths of the same kind — Copilot's workspaceStorage has a variant per
 // platform, Kiro's IDE globalStorage has four — because "the VS Code workspace
@@ -65,14 +174,21 @@ const CLIENT_SOURCE_CHECK_IDS = Object.freeze([
   'wsl-home',
   'antigravity-cli-data',
   'antigravity-ide-source',
+  'cherrystudio-transcripts',
   'claude-projects',
   'claude-transcripts',
+  'cline-cli-sessions',
   'cline-tasks',
   'codebuddy-extension-logs',
   'codebuddy-projects',
   'codex-sessions',
+  'commandcode-projects',
+  'copilot-data',
   'copilot-otel',
+  'copilot-otel-exporter',
+  DSH_SOURCE_CHECK_ID,
   'grok-sessions',
+  'grok-unified-log',
   'hermes-home',
   'hermes-profile',
   'kilocode-tasks',
@@ -81,6 +197,7 @@ const CLIENT_SOURCE_CHECK_IDS = Object.freeze([
   'kiro-cli-data',
   'kiro-ide-globalstorage',
   'kiro-sessions',
+  'lmstudio-server-logs',
   'mimocode-data',
   'mimocode-orca-data',
   'omp-sessions',
@@ -88,11 +205,14 @@ const CLIENT_SOURCE_CHECK_IDS = Object.freeze([
   'openclaw-agents',
   'pi-sessions',
   'proma-sessions',
+  'qodercn-db',
+  REASONIX_SOURCE_CHECK_ID,
   'qwen-projects',
   'tokscale-antigravity-cache',
   'tokscale-cursor-cache',
   'vscode-workspace-storage',
   'workbuddy-projects',
+  'zcode-cli-db',
   'zcode-projects',
   'zed-threads'
 ]);
@@ -111,6 +231,7 @@ const CLIENT_HEALTH_DIAGNOSTIC_CODES = Object.freeze([
   'sync-timeout',          // self-sync was killed after its deadline
   'sync-spawn-failed',     // the self-sync subprocess could not be started
   'sync-exit-error',       // the self-sync subprocess exited non-zero
+  'sync-lock-present',     // an existing Antigravity sync lock blocked the subprocess
   'no-usage-observed',     // sources are present, all-time usage is zero
   'wsl-detected-no-data'   // a WSL marker was found but the scan returned nothing
 ]);
@@ -282,6 +403,14 @@ function normalizeClientHealthEntry(value) {
   if (lastAttemptAt) entry.collection.lastAttemptAt = lastAttemptAt;
   const lastSuccessAt = normalizeTimestamp(value?.collection?.lastSuccessAt);
   if (lastSuccessAt) entry.collection.lastSuccessAt = lastSuccessAt;
+  if (entry.collection.state === 'failed') {
+    const syncFailureStage = normalizeClientSyncFailureStage(value?.collection?.syncFailureStage);
+    if (syncFailureStage) entry.collection.syncFailureStage = syncFailureStage;
+    const syncExitCode = normalizeClientSyncExitCode(value?.collection?.syncExitCode);
+    if (syncExitCode !== null) entry.collection.syncExitCode = syncExitCode;
+    const syncDetailCode = normalizeClientSyncDetailCode(value?.collection?.syncDetailCode);
+    if (syncDetailCode) entry.collection.syncDetailCode = syncDetailCode;
+  }
   const lastActivityDay = normalizeDay(value?.data?.lastActivityDay);
   if (lastActivityDay) entry.data.lastActivityDay = lastActivityDay;
   const diagnostics = normalizeDiagnostics(value?.diagnostics, entry);
@@ -347,6 +476,9 @@ module.exports = {
   CLIENT_HEALTH_OVERALL_STATES,
   CLIENT_HEALTH_VERSION,
   CLIENT_COLLECTION_STATES,
+  CLIENT_SYNC_DETAIL_CODES,
+  CLIENT_SYNC_FAILURE_STAGES,
+  MAX_SYNC_DETAIL_INPUT_LENGTH,
   CLIENT_SOURCE_CHECK_IDS,
   CLIENT_SOURCE_STATES,
   MAX_CHECKS_PER_CLIENT,
@@ -355,5 +487,9 @@ module.exports = {
   countOverall,
   deriveClientOverall,
   deriveLegacyClientStatus,
-  normalizeClientHealth
+  normalizeClientHealth,
+  normalizeClientSyncDetailCode,
+  normalizeClientSyncExitCode,
+  normalizeClientSyncFailureStage,
+  classifyClientSyncDetailCode
 };

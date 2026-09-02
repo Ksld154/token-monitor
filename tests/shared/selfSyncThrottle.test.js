@@ -14,9 +14,23 @@ const {
   createSourceSyncQueue,
   mergeSelfSyncSelection,
   selfSyncSelected,
+  SELF_SYNC_KINDS,
   SYNC_MIN_INTERVAL_MS,
   SYNC_SOURCE_EVENT_MIN_INTERVAL_MS
 } = require('../../src/shared/selfSyncThrottle');
+
+test('self-sync kinds are unique and unknown diagnostic kinds stay idle', () => {
+  assert.deepEqual([...new Set(SELF_SYNC_KINDS)], SELF_SYNC_KINDS);
+  assert.deepEqual(createSelfSyncThrottle().syncStatus('future-client'), {
+    state: 'idle',
+    lastAttemptAt: 0,
+    lastSuccessAt: 0,
+    failureCode: '',
+    failureStage: '',
+    detailCode: '',
+    exitCode: null
+  });
+});
 
 // A clock and a timer wheel the tests own outright, so a deadline can be
 // asserted at the millisecond without sleeping or patching a global.
@@ -120,9 +134,39 @@ test('a failure drops the source floor to the idle cadence until one succeeds', 
   assert.equal(throttle.sourceFloorMs('antigravity'), SYNC_SOURCE_EVENT_MIN_INTERVAL_MS);
 });
 
+test('a failed sync keeps bounded stage and exit metadata without retaining stderr', () => {
+  const throttle = createSelfSyncThrottle({ now: () => 1 });
+  const attempt = throttle.beginAttempt('antigravity');
+  throttle.completeAttempt('antigravity', attempt, true, 'sync-exit-error', {
+    failureStage: 'process-exit',
+    exitCode: 17,
+    stderr: 'ENOENT: /Users/alice/.gemini/private'
+  });
+
+  assert.deepEqual(throttle.syncStatus('antigravity'), {
+    state: 'failed',
+    lastAttemptAt: 1,
+    lastSuccessAt: 0,
+    failureCode: 'sync-exit-error',
+    failureStage: 'process-exit',
+    detailCode: 'unknown',
+    exitCode: 17
+  });
+  assert.equal(JSON.stringify(throttle.syncStatus('antigravity')).includes('alice'), false);
+});
+
+test('failure stage infers the stable code when a producer supplies only stage metadata', () => {
+  const throttle = createSelfSyncThrottle({ now: () => 1 });
+  const attempt = throttle.beginAttempt('cursor');
+  throttle.completeAttempt('cursor', attempt, true, '', { failureStage: 'timeout' });
+  assert.equal(throttle.syncStatus('cursor').failureCode, 'sync-timeout');
+  assert.equal(throttle.syncStatus('cursor').failureStage, 'timeout');
+  assert.equal(throttle.syncStatus('cursor').detailCode, 'unknown');
+});
+
 test('a superseded attempt cannot rewrite the current backoff', () => {
-  // stop() cannot cancel a sync already in flight, so a collector rebuilt by a
-  // settings change can have the previous one's attempt land after its own.
+  // Explicit forced refreshes may overlap even though collector replacement
+  // cancels its own attempt. In either case only the newest token owns outcome.
   const throttle = createSelfSyncThrottle({ now: fakeClock().now });
 
   const stale = throttle.beginAttempt('antigravity');
@@ -137,6 +181,30 @@ test('a superseded attempt cannot rewrite the current backoff', () => {
   throttle.completeAttempt('antigravity', liveFail, true);
   throttle.completeAttempt('antigravity', staleOk, false);
   assert.equal(throttle.sourceFloorMs('antigravity'), SYNC_MIN_INTERVAL_MS, 'the stale success did not clear the live backoff');
+});
+
+test('cancelling the current attempt restores its allowance and prior health', () => {
+  const clock = fakeClock();
+  const throttle = createSelfSyncThrottle({ now: clock.now });
+
+  assert.equal(throttle.claim('cursor', SYNC_MIN_INTERVAL_MS), true);
+  const first = throttle.beginAttempt('cursor');
+  assert.equal(throttle.syncStatus('cursor').state, 'pending');
+  assert.equal(throttle.cancelAttempt('cursor', first), true);
+  assert.equal(throttle.syncStatus('cursor').state, 'idle');
+  assert.equal(throttle.msUntilDue('cursor', SYNC_MIN_INTERVAL_MS), 0);
+  assert.equal(throttle.claim('cursor', SYNC_MIN_INTERVAL_MS), true, 'the replacement may claim immediately');
+
+  const failed = throttle.beginAttempt('cursor');
+  throttle.completeAttempt('cursor', failed, true, 'sync-timeout', { failureStage: 'timeout' });
+  const previousFailure = throttle.syncStatus('cursor');
+  clock.advance(SYNC_MIN_INTERVAL_MS);
+  assert.equal(throttle.claim('cursor', SYNC_MIN_INTERVAL_MS), true);
+  const cancelled = throttle.beginAttempt('cursor');
+  assert.equal(throttle.cancelAttempt('cursor', cancelled), true);
+  assert.deepEqual(throttle.syncStatus('cursor'), previousFailure, 'cancellation preserves the last real outcome');
+  assert.equal(throttle.completeAttempt('cursor', cancelled, false), undefined, 'a late completion stays fenced');
+  assert.deepEqual(throttle.syncStatus('cursor'), previousFailure);
 });
 
 test('the tick floor follows the selection that asked for the sync', () => {

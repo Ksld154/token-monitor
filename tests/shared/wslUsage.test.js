@@ -17,11 +17,12 @@ test('homeHasData returns the client ids whose markers are present', () => {
   const present = new Set([
     `${home}\\.codex\\sessions`,
     `${home}\\.hermes`,
-    `${home}\\.local\\share\\opencode`
+    `${home}\\.local\\share\\opencode`,
+    `${home}\\.zcode\\cli\\db`
   ]);
   const existsSync = (p) => present.has(p);
   const ids = homeHasData(home, existsSync);
-  assert.deepEqual([...ids].sort(), ['codex', 'hermes', 'opencode']);
+  assert.deepEqual([...ids].sort(), ['codex', 'hermes', 'opencode', 'zcode']);
 });
 
 test('homeHasData maps an alternate-root marker to its client id', () => {
@@ -38,6 +39,12 @@ test('homeHasData maps Proma agent sessions to proma', () => {
   assert.deepEqual(ids, ['proma']);
 });
 
+test('homeHasData maps LM Studio server logs to lmstudio', () => {
+  const home = '\\\\wsl$\\Ubuntu\\home\\u';
+  const present = new Set([`${home}\\.lmstudio\\server-logs`]);
+  assert.deepEqual(homeHasData(home, (p) => present.has(p)), ['lmstudio']);
+});
+
 test('homeHasData maps VS Code Copilot workspace storage to copilot', () => {
   const home = '\\\\wsl$\\Ubuntu\\home\\u';
   const workspaceRoot = `${home}\\.config\\Code\\User\\workspaceStorage`;
@@ -48,6 +55,12 @@ test('homeHasData maps VS Code Copilot workspace storage to copilot', () => {
 test('homeHasData returns empty array when no markers present', () => {
   const ids = homeHasData('\\\\wsl$\\Ubuntu\\home\\u', () => false);
   assert.deepEqual(ids, []);
+});
+
+test('WSL marker discovery deliberately excludes Reasonix', () => {
+  const home = '\\\\wsl$\\Ubuntu\\home\\u';
+  const reasonixStats = `${home}\\.reasonix\\stats`;
+  assert.deepEqual(homeHasData(home, (p) => p === reasonixStats), []);
 });
 
 test('isWslInstalled is false on non-win32 without calling exec', () => {
@@ -134,11 +147,11 @@ test('wslUsageHomes returns [] when no distro is running', () => {
 });
 
 // A WSL home that only holds a new A-class client's data (pi, Oh My Pi, zed,
-// kilocode, micode, zcode, kiro) must still be discovered — mirroring the sync
+// kilocode, Command Code, DSH, micode, zcode, kiro, LM Studio) must still be discovered — mirroring the sync
 // point each new tracked client adds (see AGENTS.md "Tracked-client list must
 // stay in sync"). Zed's marker is the threads.db file, not the directory
 // (tokscale checks is_file()).
-test('wslUsageHomes keeps a home whose only tracked-client data is pi, zed, kilocode, micode, zcode, or kiro', () => {
+test('wslUsageHomes keeps a home whose only tracked-client data is pi, zed, kilocode, Command Code, DSH, micode, zcode, kiro, or LM Studio', () => {
   function homesFor(markerRel) {
     return wslUsageHomes({
       platform: 'win32',
@@ -152,8 +165,11 @@ test('wslUsageHomes keeps a home whose only tracked-client data is pi, zed, kilo
   assert.deepEqual(homesFor('.local/share/zed/threads/threads.db'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.config/Code/User/globalStorage/kilocode.kilo-code/tasks'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.vscode-server/data/User/globalStorage/kilocode.kilo-code/tasks'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
+  assert.deepEqual(homesFor('.commandcode/projects'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
+  assert.deepEqual(homesFor('.dsh/sessions'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.local/share/mimocode/mimocode.db'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.zcode/projects'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
+  assert.deepEqual(homesFor('.zcode/cli/db'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.kiro/sessions'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.local/share/kiro-cli/data.sqlite3'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.config/Kiro/User/globalStorage/kiro.kiroagent'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
@@ -161,6 +177,7 @@ test('wslUsageHomes keeps a home whose only tracked-client data is pi, zed, kilo
   assert.deepEqual(homesFor('.config/kiro/User/globalStorage/kiro.kiroagent'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.codebuddy/projects'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
   assert.deepEqual(homesFor('.workbuddy'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
+  assert.deepEqual(homesFor('.lmstudio/server-logs'), ['\\\\wsl$\\Ubuntu\\home\\alice']);
 });
 
 test('wslUsageHomes keeps a home whose only data is VS Code Copilot Chat', () => {

@@ -4,15 +4,24 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const test = require('node:test');
+const vm = require('node:vm');
 
 const rootDir = path.join(__dirname, '..', '..');
 const read = (...p) => fs.readFileSync(path.join(rootDir, ...p), 'utf8');
 const { usageConfigFromSettings } = require('../../src/electron/runtimeConfig');
 
+function dashboardFunction(name, endMarker, context) {
+  const source = read('src', 'electron', 'renderer', 'dashboard.js');
+  const asyncStart = source.indexOf(`async function ${name}(`);
+  const start = asyncStart >= 0 ? asyncStart : source.indexOf(`function ${name}(`);
+  const body = source.slice(start, source.indexOf(endMarker));
+  return new vm.Script(`${body}\n${name};`).runInNewContext(context);
+}
+
 test('preload exposes the dashboard IPC surface', () => {
   const preload = read('src', 'electron', 'preload.js');
   assert.match(preload, /openDashboard: \(\) => ipcRenderer\.invoke\('dashboard:open'\)/);
-  assert.match(preload, /getDashboardHistory: \(\) => ipcRenderer\.invoke\('dashboard:getHistory'\)/);
+  assert.match(preload, /getDashboardHistory: \(options\) => ipcRenderer\.invoke\('dashboard:getHistory', options\)/);
   assert.match(preload, /ipcRenderer\.on\('dashboard:historyChanged', listener\)/);
   assert.match(preload, /dashboard: \{/);
   assert.match(preload, /ready: \(\) => ipcRenderer\.send\('dashboard:ready'\)/);
@@ -33,24 +42,28 @@ test('main registers dashboard handlers and a sender-scoped close', () => {
 
 test('dashboard readiness waits for data and recovers only from actual failures', () => {
   const main = read('src', 'electron', 'main.js');
+  const historySource = read('src', 'electron', 'historySource.js');
   assert.doesNotMatch(main, /dashboardShowFallback|armDashboardShowFallback/);
   assert.match(main, /webContents\.on\('did-fail-load'/);
   assert.match(main, /errorCode === -3/);
   assert.match(main, /webContents\.on\('render-process-gone'/);
   assert.match(main, /win\.on\('unresponsive'/);
   assert.match(main, /function discardFailedDashboardWindow\(win, reason\)[\s\S]*?win\.destroy\(\)/);
-  assert.match(main, /const controller = new AbortController\(\);[\s\S]*?signal: controller\.signal[\s\S]*?clearTimeout\(timeout\)/);
+  assert.match(historySource, /const controller = new AbortController\(\);[\s\S]*?signal: controller\.signal[\s\S]*?clearTimeout\(timeout\)/);
 });
 
-test('getDashboardHistory mirrors the local/sync split of fetchStats', () => {
+test('Dashboard and Widget share the complete local/host/client history resolver', () => {
   const main = read('src', 'electron', 'main.js');
-  assert.match(main, /aggregateHistory\(localDevice \? \[localDevice\] : \[\]\)/);
-  assert.match(main, /\/api\/history/);
+  const historySource = read('src', 'electron', 'historySource.js');
+  assert.match(main, /return resolveCompleteHistory\(historyResolverOptions\(\)\)/);
+  assert.match(historySource, /mode === 'local'/);
+  assert.match(historySource, /hubMode === 'host' && embeddedHub/);
+  assert.match(historySource, /\/api\/history/);
 });
 
 test('getDashboardHistory reads local history directly without a blocking collection tick', () => {
   const main = read('src', 'electron', 'main.js');
-  const fn = /async function getDashboardHistory\(\)\s*\{([\s\S]*?)\n\}/.exec(main);
+  const fn = /async function getDashboardHistory\(options = \{\}\)\s*\{([\s\S]*?)\n\}/.exec(main);
   assert.ok(fn, 'getDashboardHistory should be defined');
   // Awaiting a full collection tick here delayed the fetch for seconds; on a
   // quick close/reopen the response outlived the renderer and the dashboard
@@ -58,11 +71,20 @@ test('getDashboardHistory reads local history directly without a blocking collec
   assert.doesNotMatch(fn[1], /localCollectorHandle\.tick/);
 });
 
+test('fixed ranges request existing per-device History without changing ingest', () => {
+  const main = read('src', 'electron', 'main.js');
+  const historySource = read('src', 'electron', 'historySource.js');
+  assert.match(main, /includeDevices[\s\S]*?resolveCompleteHistoryWithDevices/);
+  assert.match(main, /ipcMain\.handle\('dashboard:getHistory', \(_event, options\) => getDashboardHistory\(options\)\)/);
+  assert.match(historySource, /\/api\/devices/);
+  assert.match(historySource, /deviceHistories: parseDeviceHistories\(devices\)/);
+});
+
 test('dashboard history is gated by the historyEnabled setting', () => {
   const main = read('src', 'electron', 'main.js');
   assert.match(main, /historyEnabled:\s*true/);
   assert.match(main, /historyEnabled:\s*parseBoolean\(patch\.historyEnabled[\s\S]*?,\s*false\)/);
-  assert.match(main, /if \(settings\?\.historyEnabled === false\) return aggregateHistory\(\[\]\)/);
+  assert.match(read('src', 'electron', 'historySource.js'), /historyEnabled === false/);
   assert.equal(usageConfigFromSettings({ historyEnabled: true }).historyEnabled, true);
   assert.equal(usageConfigFromSettings({ historyEnabled: false }).historyEnabled, false);
   assert.match(main, /usageConfigFromSettings\(settings, \{/);
@@ -133,7 +155,137 @@ test('dashboard.js fetches history over IPC and renders both tabs', () => {
   assert.match(js, /updateSettings\(\{ dashboardFlat: state\.flat \}\)/);
   assert.match(js, /dashboard\.minimize\(\)/);
   assert.match(js, /dashboard\.ready\(\)/);
-  assert.match(js, /onDashboardHistoryChanged\?\.\(\(\) => \{ void refresh\(\); \}\)/);
+  assert.match(js, /onDashboardHistoryChanged\?\.\(handleDashboardHistoryChanged\)/);
+});
+
+test('dashboard reuses the shared scheduler to defer hidden render work', () => {
+  const html = read('src', 'electron', 'renderer', 'dashboard.html');
+  const js = read('src', 'electron', 'renderer', 'dashboard.js');
+  const schedulerScript = html.indexOf('<script src="statsRenderScheduler.js"></script>');
+  const dashboardScript = html.indexOf('<script src="dashboard.js"></script>');
+
+  assert.ok(schedulerScript >= 0 && schedulerScript < dashboardScript);
+  assert.match(js, /createStatsRenderScheduler\(\{[\s\S]*isHidden: \(\) => dashboardReady && document\.hidden,[\s\S]*render: renderNow/);
+  assert.match(js, /function render\(\) \{\s*dashboardRenderScheduler\.request\(\);\s*\}/);
+  assert.match(js, /function handleDashboardVisibilityChange\(\)[\s\S]*visibilityChanged\(\)[\s\S]*scheduleDashboardRefresh\(\)/);
+  assert.match(js, /document\.addEventListener\('visibilitychange', handleDashboardVisibilityChange\)/);
+});
+
+test('dashboard restore coalesces either native event order into one refresh', () => {
+  let hidden = true;
+  let focused = true;
+  let refreshRunning = false;
+  let refreshQueued = false;
+  let refreshes = 0;
+  let frame = null;
+  const context = {
+    document: {
+      get hidden() { return hidden; },
+      hasFocus: () => focused
+    },
+    requestAnimationFrame(callback) { frame = callback; return 1; },
+    cancelAnimationFrame() { frame = null; },
+    dashboardRenderScheduler: {
+      visibilityChanged: () => true
+    },
+    refresh: () => { refreshes += 1; },
+    get refreshRunning() { return refreshRunning; },
+    get refreshQueued() { return refreshQueued; },
+    set refreshQueued(value) { refreshQueued = value; },
+    get dashboardRefreshFrame() { return frame ? 1 : 0; },
+    set dashboardRefreshFrame(value) { if (!value) frame = null; }
+  };
+  const scheduleRefresh = dashboardFunction(
+    'scheduleDashboardRefresh',
+    '\nfunction handleDashboardVisibilityChange',
+    context
+  );
+  context.scheduleDashboardRefresh = scheduleRefresh;
+  const visibilityChanged = dashboardFunction(
+    'handleDashboardVisibilityChange',
+    "\ndocument.addEventListener('visibilitychange'",
+    context
+  );
+  const focus = dashboardFunction(
+    'handleDashboardFocus',
+    "\nwindow.addEventListener('focus'",
+    context
+  );
+  const runFrame = () => { const callback = frame; frame = null; callback(); };
+
+  focus();
+  assert.equal(frame, null, 'macOS focuses the window while its document is still hidden');
+
+  hidden = false;
+  visibilityChanged();
+  focus();
+  runFrame();
+  assert.equal(refreshes, 1, 'focus then visibility shares one animation-frame refresh');
+
+  hidden = true;
+  visibilityChanged();
+  focused = false;
+  hidden = false;
+  visibilityChanged();
+  focused = true;
+  focus();
+  runFrame();
+  assert.equal(refreshes, 2, 'visibility then focus also shares one animation-frame refresh');
+
+  refreshRunning = true;
+  visibilityChanged();
+  runFrame();
+  assert.equal(refreshes, 2, 'an in-flight history refresh will render the latest state itself');
+});
+
+test('dashboard history invalidation defers IPC while hidden', () => {
+  let hidden = true;
+  let refreshQueued = false;
+  let refreshes = 0;
+  const context = {
+    document: { get hidden() { return hidden; } },
+    refresh: () => { refreshes += 1; },
+    get refreshQueued() { return refreshQueued; },
+    set refreshQueued(value) { refreshQueued = value; }
+  };
+  const historyChanged = dashboardFunction(
+    'handleDashboardHistoryChanged',
+    '\nwindow.tokenMonitor.onDashboardHistoryChanged',
+    context
+  );
+
+  historyChanged();
+  historyChanged();
+  assert.equal(refreshes, 0);
+  assert.equal(refreshQueued, true);
+
+  hidden = false;
+  historyChanged();
+  assert.equal(refreshes, 1);
+});
+
+test('an in-flight Dashboard refresh preserves a hidden invalidation for restore', async () => {
+  let refreshRunning = false;
+  let refreshQueued = true;
+  let requests = 0;
+  const context = {
+    document: { hidden: true },
+    state: { history: null, motion: 'none' },
+    window: { tokenMonitor: { getDashboardHistory: async () => { requests += 1; return {}; } } },
+    render() {},
+    console: { log() {} },
+    get refreshRunning() { return refreshRunning; },
+    set refreshRunning(value) { refreshRunning = value; },
+    get refreshQueued() { return refreshQueued; },
+    set refreshQueued(value) { refreshQueued = value; }
+  };
+  const refresh = dashboardFunction('refresh', '\nasync function boot(', context);
+
+  await refresh();
+  await Promise.resolve();
+
+  assert.equal(requests, 1);
+  assert.equal(refreshQueued, true);
 });
 
 test('heatmap metric preserves the legacy cost default and normalizes settings', () => {
@@ -181,7 +333,7 @@ test('dashboard motion is data-scoped and respects reduced-motion preferences', 
 
 test('main invalidates an open dashboard only when stats history changes', () => {
   const main = read('src', 'electron', 'main.js');
-  const sendPush = /function sendPush\(payload\)\s*\{([\s\S]*?)\n\}\n\nfunction statsHistoryRevision/.exec(main);
+  const sendPush = /function sendPush\(payload[^)]*\)\s*\{([\s\S]*?)\n\}\n\nfunction statsHistoryRevision/.exec(main);
   assert.ok(sendPush, 'sendPush should be defined before statsHistoryRevision');
   assert.match(sendPush[1], /if \(payload\?\.data\?\.stats\) \{[\s\S]*?nextHistoryRevision !== previousHistoryRevision[\s\S]*?dashboardWindow\.webContents\.send\('dashboard:historyChanged'\)/);
 });
